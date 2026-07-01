@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import Database from 'better-sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.resolve(__dirname, '../../data/freeapi.db');
@@ -128,8 +127,9 @@ export async function createBackup(): Promise<boolean> {
 
   try {
     // Ensure WAL is checkpointed so the main db file is complete
+    const { Database } = require('bun:sqlite');
     const db = new Database(DB_PATH);
-    db.pragma('wal_checkpoint(FULL)');
+    db.exec('PRAGMA wal_checkpoint(FULL)');
     db.close();
 
     const timestamp = new Date();

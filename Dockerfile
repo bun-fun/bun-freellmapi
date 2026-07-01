@@ -2,11 +2,11 @@ FROM oven/bun:1
 
 WORKDIR /app
 
-# Install build tools for native modules (better-sqlite3)
+# Install build tools for native modules
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 # Copy package files first for better caching
-COPY package.json bun.lockb* ./
+COPY package.json bun.lock* ./
 COPY server/package.json ./server/
 COPY client/package.json ./client/
 COPY shared/package.json ./shared/
@@ -33,4 +33,4 @@ ENV NODE_ENV=production
 
 EXPOSE 7860
 
-CMD ["bun", "server/dist/index.js"]
+CMD ["bun", "server/dist/server.js"]
