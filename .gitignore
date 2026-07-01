@@ -1,6 +1,7 @@
 node_modules/
 dist/
 server/data/
+data/
 *.db
 *.db-wal
 *.db-shm
@@ -11,7 +12,6 @@ server/data/
 
 # Debug and temporary files
 *.log
-.qwen/
 
 # Personal deployment scripts (contain keys/credentials — kept local)
 deploy-pi.sh
