@@ -33,7 +33,7 @@ Supported platforms: Google AI Studio, Groq, Cerebras, SambaNova, NVIDIA NIM, Mi
 - **Automatic HF Dataset backup** — Periodic SQLite backups with 3-snapshot retention
 - **Bun runtime** — Single runtime dependency, fast startup
 
-## Quick Start (Local)
+## Quick Start (Local Develop)
 
 ### Prerequisites
 
@@ -53,6 +53,30 @@ bun run dev     # Dev mode (file watching)
 ```
 
 Server starts on `http://0.0.0.0:3001` (set `PORT` to change). The admin password is printed to the console on first startup.
+
+## Standalone Server (Production)
+
+To run the server independently (e.g., on a VPS):
+
+```bash
+# Build both client and server
+bun run build
+
+# Output:
+#   server/dist/server.js       — Bun-bundled server
+#   server/dist/web/            — Built frontend SPA
+
+# Run
+cd server
+bun dist/server.js
+
+# Or copy the dist folder anywhere and run:
+cp -r server/dist /opt/freellmapi
+cd /opt/freellmapi
+PORT=7860 ENCRYPTION_KEY=<key> bun server.js
+```
+
+Only **Bun** is required on the target machine — no Node.js, no `node_modules` needed. The server binary includes all dependencies.
 
 ## Hugging Face Spaces Deployment
 
