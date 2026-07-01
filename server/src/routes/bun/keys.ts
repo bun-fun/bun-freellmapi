@@ -5,8 +5,7 @@ import { z } from 'zod';
 
 const PLATFORMS = [
   'google', 'groq', 'cerebras', 'sambanova', 'nvidia', 'mistral',
-  'openrouter', 'github', 'huggingface', 'cohere', 'cloudflare',
-  'zhipu', 'moonshot', 'minimax',
+  'openrouter', 'github', 'cohere', 'cloudflare', 'zhipu',
 ] as const;
 
 const addKeySchema = z.object({

@@ -56,6 +56,10 @@ function getEncryptionKey(): Buffer {
   return cachedKey;
 }
 
+export function getEncryptionKeyHex(): string {
+  return getEncryptionKey().toString('hex');
+}
+
 export function encrypt(text: string): { encrypted: string; iv: string; authTag: string } {
   const key = getEncryptionKey();
   const iv = crypto.randomBytes(16);

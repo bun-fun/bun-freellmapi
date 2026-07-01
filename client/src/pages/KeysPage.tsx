@@ -6,21 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/page-header'
-import type { ApiKey, Platform } from '../../../shared/types'
-
-const PLATFORMS: { value: Platform; label: string }[] = [
-  { value: 'google', label: 'Google AI Studio' },
-  { value: 'groq', label: 'Groq' },
-  { value: 'cerebras', label: 'Cerebras' },
-  { value: 'sambanova', label: 'SambaNova' },
-  { value: 'nvidia', label: 'NVIDIA NIM' },
-  { value: 'mistral', label: 'Mistral' },
-  { value: 'openrouter', label: 'OpenRouter' },
-  { value: 'github', label: 'GitHub Models' },
-  { value: 'cohere', label: 'Cohere' },
-  { value: 'cloudflare', label: 'Cloudflare Workers AI' },
-  { value: 'zhipu', label: 'Zhipu AI (Z.ai)' },
-]
+import type { ApiKey } from '../../../shared/types'
 
 const statusDot: Record<string, string> = {
   healthy: 'bg-emerald-500',
@@ -119,7 +105,7 @@ function UnifiedKeySection() {
 
 export default function KeysPage() {
   const queryClient = useQueryClient()
-  const [platform, setPlatform] = useState<Platform | ''>('')
+  const [platform, setPlatform] = useState<string>('')
   const [apiKey, setApiKey] = useState('')
   const [accountId, setAccountId] = useState('')
   const [label, setLabel] = useState('')
@@ -133,6 +119,12 @@ export default function KeysPage() {
     queryKey: ['health'],
     queryFn: () => apiFetch('/api/health'),
     refetchInterval: 30000,
+  })
+
+  const { data: platforms = [] } = useQuery<{ value: string; label: string }[]>({
+    queryKey: ['platforms'],
+    queryFn: () => apiFetch('/api/platforms'),
+    staleTime: 60000,
   })
 
   const addKey = useMutation({
@@ -186,7 +178,7 @@ export default function KeysPage() {
   const healthKeyMap = new Map<number, { status: string; lastCheckedAt: string | null }>()
   for (const k of healthData?.keys ?? []) healthKeyMap.set(k.id, k)
 
-  const grouped = PLATFORMS.map(p => ({
+  const grouped = platforms.map(p => ({
     ...p,
     keys: keys.filter(k => k.platform === p.value),
   })).filter(p => p.keys.length > 0)
@@ -213,12 +205,12 @@ export default function KeysPage() {
           <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 rounded-lg border p-4 bg-card">
             <div className="space-y-1.5">
               <Label className="text-xs">Platform</Label>
-              <Select value={platform} onValueChange={(v) => setPlatform(v as Platform)}>
+              <Select value={platform} onValueChange={(v) => setPlatform(v ?? '')}>
                 <SelectTrigger className="w-[220px]">
                   <SelectValue placeholder="Select provider" />
                 </SelectTrigger>
                 <SelectContent>
-                  {PLATFORMS.map(p => (
+                  {platforms.map(p => (
                     <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
                   ))}
                 </SelectContent>

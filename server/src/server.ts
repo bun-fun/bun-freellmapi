@@ -1,4 +1,5 @@
 import { initDb } from './db/index.js';
+import { getEncryptionKeyHex } from './lib/crypto.js';
 import { startHealthChecker } from './services/health.js';
 import { restoreLatestBackup, startBackupScheduler } from './services/backup.js';
 import { apiKeysRoute } from './routes/bun/keys.js';
@@ -9,6 +10,7 @@ import { healthRoute } from './routes/bun/health.js';
 import { settingsRoute } from './routes/bun/settings.js';
 import { proxyRoute } from './routes/bun/proxy.js';
 import { authRoute } from './routes/bun/auth.js';
+import { platformsRoute } from './routes/bun/platforms.js';
 import { authenticateRequest } from './lib/auth.js';
 import { serveStatic } from './lib/static.js';
 import path from 'path';
@@ -96,6 +98,11 @@ async function start() {
       return addCors(req, res);
     }
 
+    if (pathname === '/api/platforms') {
+      const res = await platformsRoute(req, url);
+      return addCors(req, res);
+    }
+
     // OpenAI-compatible proxy
     if (pathname.startsWith('/v1')) {
       const res = await proxyRoute(req, url);
@@ -126,6 +133,7 @@ async function start() {
   },
 });
 
+  console.log(`\n  Encryption key: ${getEncryptionKeyHex()}\n`);
   console.log(`Server running on http://${HOST}:${PORT}`);
   console.log(`Proxy endpoint: http://${HOST}:${PORT}/v1/chat/completions`);
   startHealthChecker();
