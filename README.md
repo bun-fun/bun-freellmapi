@@ -1,157 +1,136 @@
-<div align="center">
+# FreeLLMAPI (Bun-native fork)
 
-# FreeLLMAPI (Bun Branch)
+> **Live demo:** [bun008-freellmapi.hf.space](https://bun008-freellmapi.hf.space)
 
-**One OpenAI-compatible endpoint. Free LLM models from models.dev.**
+An OpenAI-compatible proxy aggregating **free-tier LLM models** from multiple providers behind a single endpoint. This is a **Bun-native** fork of the original [FreeLLMAPI](https://github.com/anomalyco/freellmapi) project.
 
-Aggregate free-tier models dynamically fetched from [models.dev](https://github.com/anomalyco/models.dev) behind a single `/v1/chat/completions` endpoint. Runs on **Bun** with automatic SQLite backups to Hugging Face Dataset.
+## Relationship to the Original
 
-</div>
+The original FreeLLMAPI uses Node.js + Express. This fork is a complete rewrite that replaces Express with **Bun's built-in HTTP server** (`Bun.serve`), resulting in:
 
----
+- Faster startup and lower memory footprint
+- Fewer dependencies (no Express, no body-parser, no cors middleware)
+- Bun SQLite driver instead of `better-sqlite3`
+- Same API surface — fully compatible with existing clients
+
+All routes, database schema, and the React frontend are preserved and adapted to Bun's native APIs.
+
+## Model Data Source
+
+This fork uses [models.dev](https://github.com/anomalyco/models.dev) instead of the original freellmapi.co API. On first startup, free models are fetched from models.dev, mapped to their respective platforms, and seeded into the local database.
+
+Supported platforms: Google AI Studio, Groq, Cerebras, SambaNova, NVIDIA NIM, Mistral, OpenRouter, GitHub Models, Cohere, Cloudflare Workers AI, Zhipu AI.
+
+**For users in mainland China:** Services like Google AI Studio, Groq, and other providers are often directly accessible, making this a viable self-hosted solution without relying on region-locked aggregators.
 
 ## Features
 
-- **Dynamic model catalog** — Free models auto-fetched from [models.dev](https://github.com/anomalyco/models.dev) on first startup
-- **OpenAI-compatible** — Drop-in replacement for OpenAI API clients
-- **Automatic fallback** — Routes to the next available model when one hits rate limits
-- **Encrypted key storage** — AES-256-GCM encryption for API keys
+- **Dynamic model catalog** — Free models auto-fetched from models.dev on startup
+- **OpenAI-compatible** — Drop-in replacement: use any OpenAI SDK with `base_url` pointing to your instance
+- **Intelligent fallback** — Routes to the next available model when one hits rate limits
+- **Encrypted key storage** — AES-256-GCM encryption for provider API keys
 - **Admin dashboard** — React SPA for managing keys, fallback chain, and analytics
-- **SQLite backup to HF Dataset** — Automatic periodic backups with 3-snapshot retention
-- **Bun runtime** — Fast startup, low memory footprint
-
----
+- **Automatic HF Dataset backup** — Periodic SQLite backups with 3-snapshot retention
+- **Bun runtime** — Single runtime dependency, fast startup
 
 ## Quick Start (Local)
 
 ### Prerequisites
 
 - [Bun](https://bun.sh/) 1.3+
-- Node.js 20+ (for building client)
 
-### 1. Clone & Install
+### Install & Run
 
 ```bash
-git clone -b bun https://github.com/stxh/freellmapi.git
+git clone https://github.com/stxh/freellmapi.git
 cd freellmapi
-bun install
-cd client && bun install && cd ..
-```
-
-### 2. Configure Environment
-
-```bash
 cp .env.example .env
-# Edit .env and set ENCRYPTION_KEY, optionally HF_TOKEN / HF_DATASET_ID
+# Edit .env — at minimum set ENCRYPTION_KEY
+
+bun install
+bun run build   # Build client SPA
+bun run dev     # Dev mode (file watching)
 ```
 
-Generate an encryption key:
+Server starts on `http://0.0.0.0:3001` (set `PORT` to change). The admin password is printed to the console on first startup.
 
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
+## Hugging Face Spaces Deployment
 
-### 3. Build & Run
+### 1. Create a Backup Dataset (Optional)
 
-```bash
-# Build client
-bun run build
+Create a **Private Dataset** on Hugging Face (e.g. `yourname/freellmapi-backups`) to store automatic SQLite backups.
 
-# Run server (dev mode with watch)
-bun run dev
+### 2. Create a Space
 
-# Or production mode
-bun run build:server
-bun run start
-```
+1. Go to [Hugging Face Spaces](https://huggingface.co/spaces) → **Create new Space**
+2. SDK: **Docker**
+3. Visibility: **Public** (if you are PRO user, you can keep it Private)
 
-Server starts on `http://0.0.0.0:3001` (or `PORT` env var).
-
-- Dashboard: `http://localhost:3001`
-- API endpoint: `http://localhost:3001/v1/chat/completions`
-
-### 4. Login
-
-Default admin credentials are printed on first startup. Set `ADMIN_PASSWORD` in `.env` to customize.
-
----
-
-## Hugging Face Space Deployment
-
-### Step 1: Create Dataset for Backups (Optional)
-
-Create a new **Dataset** on Hugging Face (e.g. `yourname/freellmapi-backups`). This will store SQLite backups.
-
-### Step 2: Create Space
-
-1. Go to [Hugging Face Spaces](https://huggingface.co/spaces) and click **Create new Space**
-2. Choose **Docker** as the SDK
-3. Space name: e.g. `freellmapi`
-4. Set visibility (Private recommended since it stores API keys)
-
-### Step 3: Push Code
+### 3. Deploy
 
 ```bash
 git clone https://huggingface.co/spaces/yourname/freellmapi
 cd freellmapi
-# Copy all files from this repo
-cp -r /path/to/freellmapi-bun/* .
-git add .
-git commit -m "Initial deploy"
-git push
+
+# bun run build first
+cp -r /path/to/bun-freellmapi/server/dist/web/* .       #web ui
+cp /path/to/bun-freellmapi/server/dist/server.js .      #server
+cp /path/to/bun-freellmapi/server/dist/Dockerfile .     #oven/bun:alpine
+git add . && git commit -m "Deploy" && git push
 ```
 
-### Step 4: Configure Secrets
+### 4. Configure Secrets
 
-In Space **Settings > Secrets**, add:
+In Space **Settings → Repository Secrets**, add:
 
 | Secret | Description |
 |--------|-------------|
-| `ENCRYPTION_KEY` | 64-char hex key for AES-256-GCM encryption |
-| `ADMIN_PASSWORD` | Admin dashboard password (optional, random if omitted) |
-| `HF_TOKEN` | Hugging Face token with write access to backup dataset |
+| `ENCRYPTION_KEY` | 64-char hex key for AES-256-GCM. Generate: `bun -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `ADMIN_PASSWORD` | Admin dashboard password (auto-generated if omitted) |
+| `HF_TOKEN` | Hugging Face token with write access to the backup dataset |
 | `HF_DATASET_ID` | Dataset repo ID, e.g. `yourname/freellmapi-backups` |
 | `BACKUP_ENABLED` | Set to `true` to enable automatic backup/restore |
 | `BACKUP_INTERVAL_MS` | Backup interval in ms (default: 86400000 = 24h) |
 
-### Step 5: Access
+### 5. Access
 
-After the Space builds (may take 2-3 minutes):
+Once built, open your Space URL. Find the auto-generated admin password in Space logs. Add provider API keys in the **Keys** page, then use the unified API key with any OpenAI client.
 
-- Open the Space URL
-- Login with admin credentials (check Space logs for auto-generated password if not set)
-- Add your provider API keys in the **Keys** page
-- Grab your unified API key from the header
+## Public Deployment Security Considerations
 
-### Docker Build Notes
+Deploying this proxy on a public-facing server exposes API key management to the internet. Follow these precautions:
 
-The included `Dockerfile` uses `oven/bun:1` as the base image. It:
+1. **Use HTTPS** — Hugging Face Spaces provides TLS automatically. For custom servers, put a reverse proxy (Nginx, Caddy) with TLS termination in front.
+2. **Set a strong `ADMIN_PASSWORD`** — Do not rely on the auto-generated password for production. Use a long, unique value.
+3. **Set a strong `ENCRYPTION_KEY`** — Provider API keys are encrypted at rest. Losing this key makes stored keys unrecoverable.
+4. **Restrict the unified API key** — The unified key printed at startup authenticates proxy requests (`/v1/chat/completions`). Treat it like any API key: rotate periodically, do not share it publicly.
+5. **Private HF Space** — Keep the Space visibility set to **Private**. The admin dashboard handles its own authentication, but private visibility adds a network-level access barrier.
+6. **Local-only proxy** — The `/v1/chat/completions` endpoint allows unauthenticated requests from `127.0.0.1`. This is intended for local development. On public deployments, remote requests always require the unified API key.
+7. **Backup dataset** — If using HF Dataset backups, the backup dataset is world-readable by default. The database contains encrypted API keys and session tokens. Set the dataset visibility to **Private** as well.
 
-1. Installs build tools for native modules
-2. Runs `bun install` for both client and server
-3. Builds the client with Vite
-4. Builds the server with Bun bundler
-5. Exposes port `7860` (Hugging Face default)
+## Environment Variables
 
----
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ENCRYPTION_KEY` | Yes | — | 64-char hex key for AES-256-GCM. Persisted to DB on first run if omitted, but setting it explicitly ensures it survives DB resets. |
+| `PORT` | No | `3001` | Server port (HF Spaces default: `7860` mapped internally) |
+| `ADMIN_PASSWORD` | No | random | Admin dashboard password. Set this for reproducible credentials. |
+| `HF_TOKEN` | No* | — | Hugging Face token with write access to the backup dataset |
+| `HF_DATASET_ID` | No* | — | Dataset repo ID, e.g. `yourname/freellmapi-backups` |
+| `BACKUP_ENABLED` | No | `false` | Set to `true` to enable automatic backup & restore via HF Dataset |
+| `BACKUP_INTERVAL_MS` | No | `86400000` | Backup interval in milliseconds |
 
-## Model Data Source
+*Required only when `BACKUP_ENABLED=true`.
 
-This branch uses [models.dev](https://github.com/anomalyco/models.dev) as the canonical source for free model listings.
+### Typical HF Spaces Secret Setup
 
-On first startup (when the SQLite database has no models), the server:
-
-1. Downloads `models.json` from models.dev
-2. Filters models where `pricing.prompt === "0"` and `pricing.completion === "0"`
-3. Maps each model to a platform:
-   - Known native providers (`google`, `groq`, `cerebras`, `sambanova`, `nvidia`, `mistral`, `github`, `cohere`, `cloudflare`, `zhipu`) are used directly
-   - Everything else (including `:free` suffix models) routes through **OpenRouter**
-4. Computes initial `intelligence_rank` and `speed_rank` based on model name heuristics
-5. Seeds the fallback chain in intelligence order
-
-Models are **not** hardcoded. To refresh the catalog, delete `data/freeapi.db` and restart.
-
----
+```
+ENCRYPTION_KEY=<64 hex chars>
+ADMIN_PASSWORD=<your secure password>
+HF_TOKEN=hf_your_token
+HF_DATASET_ID=yourname/freellmapi-backups
+BACKUP_ENABLED=true
+```
 
 ## API Usage
 
@@ -168,24 +147,7 @@ resp = client.chat.completions.create(
     messages=[{"role": "user", "content": "Hello!"}],
 )
 print(resp.choices[0].message.content)
-print("Routed via:", resp.headers.get("x-routed-via"))
 ```
-
----
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `ENCRYPTION_KEY` | Yes | — | 64-char hex encryption key |
-| `PORT` | No | `3001` | Server port |
-| `ADMIN_PASSWORD` | No | random | Initial admin password |
-| `HF_TOKEN` | No | — | HF token for dataset backup |
-| `HF_DATASET_ID` | No | — | Dataset repo ID for backups |
-| `BACKUP_ENABLED` | No | `false` | Enable HF dataset backup |
-| `BACKUP_INTERVAL_MS` | No | `86400000` | Backup interval (ms) |
-
----
 
 ## License
 
