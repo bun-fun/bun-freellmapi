@@ -26,6 +26,13 @@ export function getDb(): DatabaseType {
   return db;
 }
 
+export function closeDb(): void {
+  if (db) {
+    db.close();
+    db = null as any;
+  }
+}
+
 export async function initDb(dbPath?: string): Promise<DatabaseType> {
   const resolvedPath = dbPath ?? DB_PATH;
   const isMemory = resolvedPath === ':memory:';

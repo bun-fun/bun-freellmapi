@@ -46,11 +46,13 @@ function parseBackupTimestamp(filename: string): number {
   ).getTime();
 }
 
-export async function restoreLatestBackup(): Promise<boolean> {
+export async function restoreLatestBackup(dbPath?: string): Promise<boolean> {
   if (!BACKUP_ENABLED || !HF_TOKEN || !HF_DATASET_ID) {
     log('Backup not configured, skipping restore.');
     return false;
   }
+
+  const targetPath = dbPath ?? DB_PATH;
 
   try {
     log('Checking for remote backups...');
@@ -80,18 +82,18 @@ export async function restoreLatestBackup(): Promise<boolean> {
     const latest = backups[backups.length - 1];
     log(`Found latest backup: ${latest}`);
 
-    const dataDir = path.dirname(DB_PATH);
+    const dataDir = path.dirname(targetPath);
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
 
     // If local DB exists, back it up locally first (safety)
-    if (fs.existsSync(DB_PATH)) {
+    if (fs.existsSync(targetPath)) {
       const localBackup = path.join(
         dataDir,
         `local_before_restore_${Date.now()}.db`
       );
-      fs.copyFileSync(DB_PATH, localBackup);
+      fs.copyFileSync(targetPath, localBackup);
       log(`Local DB backed up to ${localBackup}`);
     }
 
@@ -105,8 +107,8 @@ export async function restoreLatestBackup(): Promise<boolean> {
     }
 
     const buffer = Buffer.from(await downloadRes.arrayBuffer());
-    fs.writeFileSync(DB_PATH, buffer);
-    log(`Restored ${latest} to ${DB_PATH} (${buffer.length} bytes)`);
+    fs.writeFileSync(targetPath, buffer);
+    log(`Restored ${latest} to ${targetPath} (${buffer.length} bytes)`);
     return true;
   } catch (err) {
     console.error('[Backup] Restore failed:', err);

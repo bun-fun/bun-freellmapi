@@ -31,8 +31,8 @@ if (!fs.existsSync(dataDir)) {
 }
 
 async function start() {
+  await restoreLatestBackup(DB_PATH);
   await initDb(DB_PATH);
-  await restoreLatestBackup();
 
   const server = Bun.serve({
   port: PORT,
