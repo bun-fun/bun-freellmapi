@@ -226,17 +226,34 @@ function guessSizeLabel(name: string): string {
 
 function ensureAdminUser(db: DatabaseType) {
   const count = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
-  if (count.cnt > 0) return;
+  const exists = count.cnt > 0;
 
-  const username = 'admin';
-  const password = process.env.ADMIN_PASSWORD || `${crypto.randomBytes(3).toString('hex')}-${crypto.randomBytes(3).toString('hex')}`;
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  let password: string;
+  if (!exists) {
+    const username = 'admin';
+    password = process.env.ADMIN_PASSWORD || `${crypto.randomBytes(3).toString('hex')}-${crypto.randomBytes(3).toString('hex')}`;
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
 
-  db.prepare('INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)').run(username, hash, salt);
+    db.prepare('INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)').run(username, hash, salt);
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)").run(password);
 
-  console.log(`\n  Admin user created:`);
-  console.log(`  Username: ${username}`);
+    console.log(`\n  Admin user created:`);
+  } else {
+    const stored = db.prepare("SELECT value FROM settings WHERE key = 'admin_password'").get() as { value: string } | undefined;
+    if (stored?.value) {
+      password = stored.value;
+    } else {
+      password = `${crypto.randomBytes(4).toString('hex')}-${crypto.randomBytes(4).toString('hex')}-${crypto.randomBytes(4).toString('hex')}`;
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+      db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE username = ?').run(hash, salt, 'admin');
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)").run(password);
+      console.log(`\n  Admin password regenerated:`);
+    }
+  }
+
+  console.log(`  Username: admin`);
   console.log(`  Password: ${password}`);
   console.log(`  (set ADMIN_PASSWORD env var on first run to use a custom password)\n`);
 }
