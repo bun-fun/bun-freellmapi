@@ -236,9 +236,11 @@ function ensureAdminUser(db: DatabaseType) {
   const exists = count.cnt > 0;
 
   let password: string;
+  const envPassword = process.env.ADMIN_PASSWORD;
+
   if (!exists) {
     const username = 'admin';
-    password = process.env.ADMIN_PASSWORD || `${crypto.randomBytes(3).toString('hex')}-${crypto.randomBytes(3).toString('hex')}`;
+    password = envPassword || `${crypto.randomBytes(3).toString('hex')}-${crypto.randomBytes(3).toString('hex')}`;
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
 
@@ -246,6 +248,18 @@ function ensureAdminUser(db: DatabaseType) {
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)").run(password);
 
     console.log(`\n  Admin user created:`);
+  } else if (envPassword) {
+    password = envPassword;
+    const stored = db.prepare("SELECT value FROM settings WHERE key = 'admin_password'").get() as { value: string } | undefined;
+    if (stored?.value !== envPassword) {
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+      db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE username = ?').run(hash, salt, 'admin');
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)").run(password);
+      console.log(`\n  Admin password set from ADMIN_PASSWORD env:`);
+    } else {
+      console.log(`\n  Admin credentials:`);
+    }
   } else {
     const stored = db.prepare("SELECT value FROM settings WHERE key = 'admin_password'").get() as { value: string } | undefined;
     if (stored?.value) {
@@ -262,7 +276,7 @@ function ensureAdminUser(db: DatabaseType) {
 
   console.log(`  Username: admin`);
   console.log(`  Password: ${password}`);
-  console.log(`  (set ADMIN_PASSWORD env var on first run to use a custom password)\n`);
+  console.log(`  (set ADMIN_PASSWORD env var to use a custom password)\n`);
 }
 
 function ensureUnifiedKey(db: DatabaseType) {
