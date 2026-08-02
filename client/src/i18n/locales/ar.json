@@ -56,7 +56,9 @@
     "backToLogin": "العودة إلى تسجيل الدخول",
     "passwordChanged": "تم تغيير كلمة المرور بنجاح.",
     "emailChanged": "تم تغيير البريد الإلكتروني بنجاح.",
-    "passwordReset": "تمت إعادة تعيين كلمة المرور. يرجى تسجيل الدخول."
+    "passwordReset": "تمت إعادة تعيين كلمة المرور. يرجى تسجيل الدخول.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "حفظ",

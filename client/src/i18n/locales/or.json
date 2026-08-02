@@ -56,7 +56,9 @@
     "backToLogin": "ସାଇନ ଇନକୁ ଫେରନ୍ତୁ",
     "passwordChanged": "ପାସୱାର୍ଡ ସଫଳତାର ସହ ବଦଳିଲା।",
     "emailChanged": "ଇମେଲ ସଫଳତାର ସହ ବଦଳିଲା।",
-    "passwordReset": "ପାସୱାର୍ଡ ରିସେଟ ହେଲା। ଦୟାକରି ସାଇନ ଇନ କରନ୍ତୁ।"
+    "passwordReset": "ପାସୱାର୍ଡ ରିସେଟ ହେଲା। ଦୟାକରି ସାଇନ ଇନ କରନ୍ତୁ।",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "ସଞ୍ଚୟ କରନ୍ତୁ",

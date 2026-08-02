@@ -56,7 +56,9 @@
     "backToLogin": "Girişə qayıt",
     "passwordChanged": "Parol uğurla dəyişdirildi.",
     "emailChanged": "E-poçt uğurla dəyişdirildi.",
-    "passwordReset": "Parol sıfırlandı. Zəhmət olmasa daxil olun."
+    "passwordReset": "Parol sıfırlandı. Zəhmət olmasa daxil olun.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Xilas et",

@@ -43,10 +43,11 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
 
   // Inline field feedback; the server stays authoritative. Only the setup form
   // enforces the password minimum client-side (an existing password of any
-  // length must still be able to log in).
+  // length must still be able to log in). Only setup mode enforces email format
+  // — the Bun fork uses "admin" as the default username, which isn't an email.
   const emailError = !email.trim()
     ? t('validation.required')
-    : !isEmail(email)
+    : isSetup && !isEmail(email)
       ? t('validation.email')
       : null
   const passwordError = !password
@@ -105,14 +106,14 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
         </p>
         <form onSubmit={submit} className="space-y-3" noValidate>
           <div className="space-y-1.5">
-            <Label className="text-xs" htmlFor="auth-email">{t('auth.email')}</Label>
+            <Label className="text-xs" htmlFor="auth-email">{isSetup ? t('auth.email') : t('auth.username')}</Label>
             <Input
               id="auth-email"
-              type="email"
+              type={isSetup ? 'email' : 'text'}
               autoComplete="username"
               value={email}
               onChange={e => setEmail(e.target.value)}
-              placeholder={t('auth.emailPlaceholder')}
+              placeholder={isSetup ? t('auth.emailPlaceholder') : t('auth.usernamePlaceholder')}
               aria-invalid={attempted && !!emailError}
             />
             {attempted && <FieldError error={emailError} />}

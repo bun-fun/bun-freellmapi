@@ -56,7 +56,9 @@
     "backToLogin": "Girişe dön",
     "passwordChanged": "Şifre değiştirildi.",
     "emailChanged": "E-posta değiştirildi.",
-    "passwordReset": "Şifre sıfırlandı. Lütfen giriş yapın."
+    "passwordReset": "Şifre sıfırlandı. Lütfen giriş yapın.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Kaydet",

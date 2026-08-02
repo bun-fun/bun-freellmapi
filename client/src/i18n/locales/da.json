@@ -56,7 +56,9 @@
     "backToLogin": "Tilbage til login",
     "passwordChanged": "Adgangskoden er skiftet.",
     "emailChanged": "E-mailen er skiftet.",
-    "passwordReset": "Adgangskoden er nulstillet. Log ind."
+    "passwordReset": "Adgangskoden er nulstillet. Log ind.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Gem",

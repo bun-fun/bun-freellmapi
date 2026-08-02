@@ -56,7 +56,9 @@
     "backToLogin": "সাইন ইনে ফিরুন",
     "passwordChanged": "পাসওয়ার্ড সফলভাবে পরিবর্তিত হয়েছে।",
     "emailChanged": "ইমেল সফলভাবে পরিবর্তিত হয়েছে।",
-    "passwordReset": "পাসওয়ার্ড রিসেট হয়েছে। সাইন ইন করুন।"
+    "passwordReset": "পাসওয়ার্ড রিসেট হয়েছে। সাইন ইন করুন।",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "সংরক্ষণ করুন",

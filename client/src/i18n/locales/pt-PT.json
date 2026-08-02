@@ -56,7 +56,9 @@
     "backToLogin": "Voltar ao início de sessão",
     "passwordChanged": "Palavra-passe alterada com sucesso.",
     "emailChanged": "E-mail alterado com sucesso.",
-    "passwordReset": "Palavra-passe reposta. Inicie sessão."
+    "passwordReset": "Palavra-passe reposta. Inicie sessão.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Guardar",

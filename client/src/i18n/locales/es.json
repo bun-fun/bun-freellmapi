@@ -56,7 +56,9 @@
     "backToLogin": "Volver al inicio de sesión",
     "passwordChanged": "Contraseña cambiada correctamente.",
     "emailChanged": "Correo electrónico cambiado correctamente.",
-    "passwordReset": "Contraseña restablecida correctamente. Por favor, inicia sesión."
+    "passwordReset": "Contraseña restablecida correctamente. Por favor, inicia sesión.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Guardar",

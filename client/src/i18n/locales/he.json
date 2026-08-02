@@ -56,7 +56,9 @@
     "backToLogin": "חזרה להתחברות",
     "passwordChanged": "הסיסמה שונתה בהצלחה.",
     "emailChanged": "הדוא\"ל שונה בהצלחה.",
-    "passwordReset": "הסיסמה אופסה. יש להתחבר."
+    "passwordReset": "הסיסמה אופסה. יש להתחבר.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "שמור",

@@ -56,7 +56,9 @@
     "backToLogin": "ወደ መግቢያ ተመለስ",
     "passwordChanged": "የይለፍ ቃል በተሳካ ሁኔታ ተቀይሯል።",
     "emailChanged": "ኢሜይል በተሳካ ሁኔታ ተቀይሯል።",
-    "passwordReset": "የይለፍ ቃል ዳግም ተጀምሯል። እባክዎ ይግቡ።"
+    "passwordReset": "የይለፍ ቃል ዳግም ተጀምሯል። እባክዎ ይግቡ።",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "አስቀምጥ",

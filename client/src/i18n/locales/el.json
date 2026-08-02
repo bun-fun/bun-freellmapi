@@ -56,7 +56,9 @@
     "backToLogin": "Πίσω στη σύνδεση",
     "passwordChanged": "Ο κωδικός άλλαξε.",
     "emailChanged": "Το e-mail άλλαξε.",
-    "passwordReset": "Ο κωδικός επαναφέρθηκε. Συνδεθείτε."
+    "passwordReset": "Ο κωδικός επαναφέρθηκε. Συνδεθείτε.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Αποθήκευση",

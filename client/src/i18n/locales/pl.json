@@ -56,7 +56,9 @@
     "backToLogin": "Powrót do logowania",
     "passwordChanged": "Hasło zostało zmienione.",
     "emailChanged": "E-mail został zmieniony.",
-    "passwordReset": "Hasło zresetowane. Zaloguj się ponownie."
+    "passwordReset": "Hasło zresetowane. Zaloguj się ponownie.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Zapisz",

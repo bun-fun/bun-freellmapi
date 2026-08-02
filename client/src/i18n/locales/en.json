@@ -22,6 +22,8 @@
     "email": "Email",
     "password": "Password",
     "emailPlaceholder": "you@example.com",
+"username": "Username",
+"usernamePlaceholder": "admin",
     "passwordPlaceholderSetup": "at least 8 characters",
     "passwordPlaceholderLogin": "your password",
     "setupDescription": "Set the email and password that will protect this dashboard.",

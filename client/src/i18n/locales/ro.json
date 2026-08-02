@@ -56,7 +56,9 @@
     "backToLogin": "Înapoi la autentificare",
     "passwordChanged": "Parola a fost schimbată.",
     "emailChanged": "E-mailul a fost schimbat.",
-    "passwordReset": "Parola a fost resetată. Autentifică-te."
+    "passwordReset": "Parola a fost resetată. Autentifică-te.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Salvează",

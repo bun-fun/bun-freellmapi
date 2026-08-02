@@ -56,7 +56,9 @@
     "backToLogin": "Назад на пријаву",
     "passwordChanged": "Лозинка је промењена.",
     "emailChanged": "Имејл је промењен.",
-    "passwordReset": "Лозинка је ресетована. Пријавите се."
+    "passwordReset": "Лозинка је ресетована. Пријавите се.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Сачувај",

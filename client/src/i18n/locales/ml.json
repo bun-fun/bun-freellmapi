@@ -56,7 +56,9 @@
     "backToLogin": "സൈൻ ഇന്നിലേക്ക് മടങ്ങുക",
     "passwordChanged": "പാസ്‌വേഡ് വിജയകരമായി മാറ്റി.",
     "emailChanged": "ഇമെയിൽ വിജയകരമായി മാറ്റി.",
-    "passwordReset": "പാസ്‌വേഡ് റീസെറ്റ് ചെയ്തു. സൈൻ ഇൻ ചെയ്യുക."
+    "passwordReset": "പാസ്‌വേഡ് റീസെറ്റ് ചെയ്തു. സൈൻ ഇൻ ചെയ്യുക.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "സംരക്ഷിക്കുക",

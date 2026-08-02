@@ -56,7 +56,9 @@
     "backToLogin": "ត្រឡប់ទៅចូលគណនី",
     "passwordChanged": "បានប្តូរពាក្យសម្ងាត់ដោយជោគជ័យ។",
     "emailChanged": "បានប្តូរអ៊ីមែលដោយជោគជ័យ។",
-    "passwordReset": "បានកំណត់ពាក្យសម្ងាត់ឡើងវិញ។ សូមចូលគណនី។"
+    "passwordReset": "បានកំណត់ពាក្យសម្ងាត់ឡើងវិញ។ សូមចូលគណនី។",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "រក្សាទុក",

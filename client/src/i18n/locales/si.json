@@ -56,7 +56,9 @@
     "backToLogin": "පිවිසුමට ආපසු",
     "passwordChanged": "මුරපදය සාර්ථකව වෙනස් විය.",
     "emailChanged": "ඊමේල් සාර්ථකව වෙනස් විය.",
-    "passwordReset": "මුරපදය යළි සකසන ලදි. පිවිසෙන්න."
+    "passwordReset": "මුරපදය යළි සකසන ලදි. පිවිසෙන්න.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "සුරකින්න",

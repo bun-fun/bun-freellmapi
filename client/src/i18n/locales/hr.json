@@ -56,7 +56,9 @@
     "backToLogin": "Natrag na prijavu",
     "passwordChanged": "Lozinka je promijenjena.",
     "emailChanged": "E-pošta je promijenjena.",
-    "passwordReset": "Lozinka je poništena. Prijavite se."
+    "passwordReset": "Lozinka je poništena. Prijavite se.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Spasi",

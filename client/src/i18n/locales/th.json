@@ -56,7 +56,9 @@
     "backToLogin": "กลับไปเข้าสู่ระบบ",
     "passwordChanged": "เปลี่ยนรหัสผ่านเรียบร้อยแล้ว",
     "emailChanged": "เปลี่ยนอีเมลเรียบร้อยแล้ว",
-    "passwordReset": "รีเซ็ตรหัสผ่านแล้ว กรุณาเข้าสู่ระบบ"
+    "passwordReset": "รีเซ็ตรหัสผ่านแล้ว กรุณาเข้าสู่ระบบ",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "บันทึก",

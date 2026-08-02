@@ -56,7 +56,9 @@
     "backToLogin": "Vissza a bejelentkezéshez",
     "passwordChanged": "A jelszó módosult.",
     "emailChanged": "Az e-mail-cím módosult.",
-    "passwordReset": "A jelszó visszaállt. Jelentkezzen be."
+    "passwordReset": "A jelszó visszaállt. Jelentkezzen be.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Mentés",

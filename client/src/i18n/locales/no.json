@@ -56,7 +56,9 @@
     "backToLogin": "Tilbake til innlogging",
     "passwordChanged": "Passordet er endret.",
     "emailChanged": "E-posten er endret.",
-    "passwordReset": "Passordet er tilbakestilt. Logg inn."
+    "passwordReset": "Passordet er tilbakestilt. Logg inn.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Lagre",

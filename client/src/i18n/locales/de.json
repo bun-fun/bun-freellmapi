@@ -56,7 +56,9 @@
     "backToLogin": "Zurück zur Anmeldung",
     "passwordChanged": "Passwort erfolgreich geändert.",
     "emailChanged": "E-Mail erfolgreich geändert.",
-    "passwordReset": "Passwort zurückgesetzt. Bitte melden Sie sich an."
+    "passwordReset": "Passwort zurückgesetzt. Bitte melden Sie sich an.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Speichern",

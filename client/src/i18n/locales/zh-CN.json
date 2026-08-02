@@ -22,6 +22,8 @@
     "email": "邮箱",
     "password": "密码",
     "emailPlaceholder": "you@example.com",
+"username": "用户名",
+"usernamePlaceholder": "admin",
     "passwordPlaceholderSetup": "至少 8 个字符",
     "passwordPlaceholderLogin": "您的密码",
     "setupDescription": "设置用于保护此控制台的邮箱和密码。",

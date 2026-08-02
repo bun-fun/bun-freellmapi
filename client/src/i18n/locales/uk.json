@@ -56,7 +56,9 @@
     "backToLogin": "Назад до входу",
     "passwordChanged": "Пароль успішно змінено.",
     "emailChanged": "E-mail успішно змінено.",
-    "passwordReset": "Пароль скинуто. Увійдіть знову."
+    "passwordReset": "Пароль скинуто. Увійдіть знову.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "зберегти",

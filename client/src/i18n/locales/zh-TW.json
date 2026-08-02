@@ -56,7 +56,9 @@
     "backToLogin": "返回登入",
     "passwordChanged": "密碼已成功變更。",
     "emailChanged": "電子郵件已成功變更。",
-    "passwordReset": "密碼已重設，請重新登入。"
+    "passwordReset": "密碼已重設，請重新登入。",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "儲存",

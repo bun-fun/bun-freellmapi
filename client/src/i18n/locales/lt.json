@@ -56,7 +56,9 @@
     "backToLogin": "Atgal į prisijungimą",
     "passwordChanged": "Slaptažodis pakeistas.",
     "emailChanged": "El. paštas pakeistas.",
-    "passwordReset": "Slaptažodis atstatytas. Prisijunkite."
+    "passwordReset": "Slaptažodis atstatytas. Prisijunkite.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Išsaugoti",

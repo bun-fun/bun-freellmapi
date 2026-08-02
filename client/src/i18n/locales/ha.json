@@ -56,7 +56,9 @@
     "backToLogin": "Koma shiga",
     "passwordChanged": "An canza kalmar sirri.",
     "emailChanged": "An canza imel.",
-    "passwordReset": "An sake saita kalmar sirri. Da fatan shiga."
+    "passwordReset": "An sake saita kalmar sirri. Da fatan shiga.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Ajiye",

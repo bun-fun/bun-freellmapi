@@ -56,7 +56,9 @@
     "backToLogin": "Rudi kuingia",
     "passwordChanged": "Nenosiri limebadilishwa.",
     "emailChanged": "Barua pepe imebadilishwa.",
-    "passwordReset": "Nenosiri limewekwa upya. Tafadhali ingia."
+    "passwordReset": "Nenosiri limewekwa upya. Tafadhali ingia.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Hifadhi",

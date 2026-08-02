@@ -56,7 +56,9 @@
     "backToLogin": "साइन इन पर वापस",
     "passwordChanged": "पासवर्ड सफलतापूर्वक बदला गया।",
     "emailChanged": "ईमेल सफलतापूर्वक बदला गया।",
-    "passwordReset": "पासवर्ड रीसेट हो गया। कृपया साइन इन करें।"
+    "passwordReset": "पासवर्ड रीसेट हो गया। कृपया साइन इन करें।",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "सहेजें",

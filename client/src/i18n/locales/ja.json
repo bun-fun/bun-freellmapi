@@ -56,7 +56,9 @@
     "backToLogin": "ログインに戻る",
     "passwordChanged": "パスワードを変更しました。",
     "emailChanged": "メールアドレスを変更しました。",
-    "passwordReset": "パスワードをリセットしました。ログインしてください。"
+    "passwordReset": "パスワードをリセットしました。ログインしてください。",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "保存",

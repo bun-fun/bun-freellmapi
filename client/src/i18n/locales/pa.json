@@ -56,7 +56,9 @@
     "backToLogin": "ਸਾਈਨ ਇਨ ਤੇ ਵਾਪਸ",
     "passwordChanged": "ਪਾਸਵਰਡ ਸਫਲਤਾਪੂਰਵਕ ਬਦਲਿਆ ਗਿਆ।",
     "emailChanged": "ਈਮੇਲ ਸਫਲਤਾਪੂਰਵਕ ਬਦਲੀ ਗਈ।",
-    "passwordReset": "ਪਾਸਵਰਡ ਰੀਸੈੱਟ ਹੋ ਗਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਸਾਈਨ ਇਨ ਕਰੋ।"
+    "passwordReset": "ਪਾਸਵਰਡ ਰੀਸੈੱਟ ਹੋ ਗਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਸਾਈਨ ਇਨ ਕਰੋ।",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "ਸੇਵ ਕਰੋ",

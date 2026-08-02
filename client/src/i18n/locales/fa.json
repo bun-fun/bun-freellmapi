@@ -56,7 +56,9 @@
     "backToLogin": "بازگشت به ورود",
     "passwordChanged": "رمز عبور با موفقیت تغییر کرد.",
     "emailChanged": "ایمیل با موفقیت تغییر کرد.",
-    "passwordReset": "رمز عبور بازنشانی شد. لطفاً وارد شوید."
+    "passwordReset": "رمز عبور بازنشانی شد. لطفاً وارد شوید.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "ذخیره کنید",

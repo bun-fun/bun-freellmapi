@@ -56,7 +56,9 @@
     "backToLogin": "Voltar ao login",
     "passwordChanged": "Senha alterada com sucesso.",
     "emailChanged": "E-mail alterado com sucesso.",
-    "passwordReset": "Senha redefinida com sucesso. Por favor, entre novamente."
+    "passwordReset": "Senha redefinida com sucesso. Por favor, entre novamente.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Salvar",

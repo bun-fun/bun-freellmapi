@@ -56,7 +56,9 @@
     "backToLogin": "Padà sí ìwọlé",
     "passwordChanged": "A yí ọ̀rọ̀ aṣínà padà.",
     "emailChanged": "A yí ìmẹ́lì padà.",
-    "passwordReset": "A tún ọ̀rọ̀ aṣínà ṣe. Jọ̀wọ́ wọlé."
+    "passwordReset": "A tún ọ̀rọ̀ aṣínà ṣe. Jọ̀wọ́ wọlé.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Fipamọ",

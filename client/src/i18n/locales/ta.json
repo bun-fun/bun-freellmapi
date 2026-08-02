@@ -56,7 +56,9 @@
     "backToLogin": "உள்நுழைவுக்குத் திரும்பு",
     "passwordChanged": "கடவுச்சொல் வெற்றிகரமாக மாற்றப்பட்டது.",
     "emailChanged": "மின்னஞ்சல் வெற்றிகரமாக மாற்றப்பட்டது.",
-    "passwordReset": "கடவுச்சொல் மீட்டமைக்கப்பட்டது. உள்நுழையவும்."
+    "passwordReset": "கடவுச்சொல் மீட்டமைக்கப்பட்டது. உள்நுழையவும்.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "சேமிக்கவும்",

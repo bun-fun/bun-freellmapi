@@ -56,7 +56,9 @@
     "backToLogin": "Tillbaka till inloggning",
     "passwordChanged": "Lösenordet har bytts.",
     "emailChanged": "E-postadressen har bytts.",
-    "passwordReset": "Lösenordet återställt. Logga in."
+    "passwordReset": "Lösenordet återställt. Logga in.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Spara",

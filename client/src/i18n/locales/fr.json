@@ -56,7 +56,9 @@
     "backToLogin": "Retour à la connexion",
     "passwordChanged": "Mot de passe modifié avec succès.",
     "emailChanged": "Adresse e-mail modifiée avec succès.",
-    "passwordReset": "Mot de passe réinitialisé avec succès. Veuillez vous connecter."
+    "passwordReset": "Mot de passe réinitialisé avec succès. Veuillez vous connecter.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Enregistrer",

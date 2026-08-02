@@ -56,7 +56,9 @@
     "backToLogin": "Kembali ke masuk",
     "passwordChanged": "Kata sandi berhasil diubah.",
     "emailChanged": "E-mail berhasil diubah.",
-    "passwordReset": "Kata sandi telah direset. Silakan masuk."
+    "passwordReset": "Kata sandi telah direset. Silakan masuk.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Simpan",

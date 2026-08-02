@@ -56,7 +56,9 @@
     "backToLogin": "سائن اِن پر واپس",
     "passwordChanged": "پاس ورڈ کامیابی سے تبدیل ہوگیا۔",
     "emailChanged": "ای میل کامیابی سے تبدیل ہوگئی۔",
-    "passwordReset": "پاس ورڈ ری سیٹ ہوگیا۔ براہ کرم سائن اِن کریں۔"
+    "passwordReset": "پاس ورڈ ری سیٹ ہوگیا۔ براہ کرم سائن اِن کریں۔",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "محفوظ کریں۔",

@@ -56,7 +56,9 @@
     "backToLogin": "Takaisin kirjautumiseen",
     "passwordChanged": "Salasana vaihdettu.",
     "emailChanged": "Sähköposti vaihdettu.",
-    "passwordReset": "Salasana palautettu. Kirjaudu sisään."
+    "passwordReset": "Salasana palautettu. Kirjaudu sisään.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Tallenna",

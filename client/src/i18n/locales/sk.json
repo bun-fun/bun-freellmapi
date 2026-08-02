@@ -56,7 +56,9 @@
     "backToLogin": "Späť na prihlásenie",
     "passwordChanged": "Heslo bolo zmenené.",
     "emailChanged": "E-mail bol zmenený.",
-    "passwordReset": "Heslo bolo resetované. Prihláste sa."
+    "passwordReset": "Heslo bolo resetované. Prihláste sa.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Uložiť",

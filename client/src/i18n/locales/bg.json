@@ -56,7 +56,9 @@
     "backToLogin": "Назад към входа",
     "passwordChanged": "Паролата е сменена.",
     "emailChanged": "Имейлът е сменен.",
-    "passwordReset": "Паролата е нулирана. Влезте отново."
+    "passwordReset": "Паролата е нулирана. Влезте отново.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Запази",

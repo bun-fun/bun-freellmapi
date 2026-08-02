@@ -56,7 +56,9 @@
     "backToLogin": "Laghachi na nbanye",
     "passwordChanged": "Agbanwela okwuntughe.",
     "emailChanged": "Agbanwela ozi-e.",
-    "passwordReset": "Atọghatala okwuntughe. Biko banye."
+    "passwordReset": "Atọghatala okwuntughe. Biko banye.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Chekwa",

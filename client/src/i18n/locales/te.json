@@ -56,7 +56,9 @@
     "backToLogin": "సైన్ ఇన్‌కు తిరిగి",
     "passwordChanged": "పాస్‌వర్డ్ విజయవంతంగా మార్చబడింది.",
     "emailChanged": "ఇమెయిల్ విజయవంతంగా మార్చబడింది.",
-    "passwordReset": "పాస్‌వర్డ్ రీసెట్ అయింది. దయచేసి సైన్ ఇన్ చేయండి."
+    "passwordReset": "పాస్‌వర్డ్ రీసెట్ అయింది. దయచేసి సైన్ ఇన్ చేయండి.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "సేవ్ చేయండి",

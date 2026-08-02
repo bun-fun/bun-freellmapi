@@ -56,7 +56,9 @@
     "backToLogin": "Terug naar inloggen",
     "passwordChanged": "Wachtwoord gewijzigd.",
     "emailChanged": "E-mailadres gewijzigd.",
-    "passwordReset": "Wachtwoord gereset. Log opnieuw in."
+    "passwordReset": "Wachtwoord gereset. Log opnieuw in.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Sla op",

@@ -56,7 +56,9 @@
     "backToLogin": "შესვლაზე დაბრუნება",
     "passwordChanged": "პაროლი წარმატებით შეიცვალა.",
     "emailChanged": "ელფოსტა წარმატებით შეიცვალა.",
-    "passwordReset": "პაროლი აღდგა. გთხოვთ, შედით."
+    "passwordReset": "პაროლი აღდგა. გთხოვთ, შედით.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "შენახვა",

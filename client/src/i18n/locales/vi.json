@@ -56,7 +56,9 @@
     "backToLogin": "Quay lại đăng nhập",
     "passwordChanged": "Đã đổi mật khẩu thành công.",
     "emailChanged": "Đã đổi e-mail thành công.",
-    "passwordReset": "Đã đặt lại mật khẩu. Vui lòng đăng nhập."
+    "passwordReset": "Đã đặt lại mật khẩu. Vui lòng đăng nhập.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Lưu",

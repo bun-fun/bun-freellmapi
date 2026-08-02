@@ -56,7 +56,9 @@
     "backToLogin": "ဝင်ရောက်ရန်သို့ပြန်သွားရန်",
     "passwordChanged": "စကားဝှက်ပြောင်းပြီးပါပြီ။",
     "emailChanged": "အီးမေးလ်ပြောင်းပြီးပါပြီ။",
-    "passwordReset": "စကားဝှက်ပြန်လည်သတ်မှတ်ပြီးပါပြီ။ ဝင်ရောက်ပါ။"
+    "passwordReset": "စကားဝှက်ပြန်လည်သတ်မှတ်ပြီးပါပြီ။ ဝင်ရောက်ပါ။",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "သိမ်းဆည်းပါ",

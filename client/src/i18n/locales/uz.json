@@ -56,7 +56,9 @@
     "backToLogin": "Kirishga qaytish",
     "passwordChanged": "Parol muvaffaqiyatli o'zgartirildi.",
     "emailChanged": "E-pochta muvaffaqiyatli o'zgartirildi.",
-    "passwordReset": "Parol tiklandi. Iltimos, kiring."
+    "passwordReset": "Parol tiklandi. Iltimos, kiring.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "Saqlash",

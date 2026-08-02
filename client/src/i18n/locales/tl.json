@@ -56,7 +56,9 @@
     "backToLogin": "Bumalik sa pag-sign in",
     "passwordChanged": "Matagumpay na napalitan ang password.",
     "emailChanged": "Matagumpay na napalitan ang e-mail.",
-    "passwordReset": "Na-reset ang password. Mag-sign in po."
+    "passwordReset": "Na-reset ang password. Mag-sign in po.",
+    "username": "Username",
+    "usernamePlaceholder": "admin"
   },
   "common": {
     "save": "I-save",
