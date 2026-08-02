@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import type { DatabaseType } from '../index.js';
+
+import type { Db } from '../types.js';
 import { DEFAULT_MIGRATIONS, type MigrationModule } from './defaults.js';
 
 export type MigrationDirection = 'up' | 'down';
@@ -40,7 +41,7 @@ const CREATE_MIGRATIONS_TABLE_SQL = `
 `;
 
 export async function runMigrations(
-  db: DatabaseType,
+  db: Db,
   direction: MigrationDirection = 'up',
   options: MigrationRunnerOptions = {},
 ): Promise<void> {
@@ -61,7 +62,7 @@ export async function runMigrations(
 }
 
 export function runMigrationsSync(
-  db: DatabaseType,
+  db: Db,
   direction: MigrationDirection = 'up',
 ): void {
   initializeMigrationTracking(db);
@@ -81,7 +82,7 @@ export function runMigrationsSync(
 }
 
 export function getMigrationStatuses(
-  db: DatabaseType,
+  db: Db,
   options: MigrationRunnerOptions = {},
 ): MigrationStatus[] {
   initializeMigrationTracking(db);
@@ -94,16 +95,16 @@ export function getMigrationStatuses(
   }));
 }
 
-function initializeMigrationTracking(db: DatabaseType): void {
+function initializeMigrationTracking(db: Db): void {
   ensureMigrationsTable(db);
 }
 
-function ensureMigrationsTable(db: DatabaseType): void {
+function ensureMigrationsTable(db: Db): void {
   db.exec(CREATE_MIGRATIONS_TABLE_SQL);
 }
 
 async function runPendingMigrations(
-  db: DatabaseType,
+  db: Db,
   records: readonly MigrationRecord[],
   options: MigrationRunnerOptions,
 ): Promise<void> {
@@ -124,7 +125,7 @@ async function runPendingMigrations(
 }
 
 async function runLatestDownMigration(
-  db: DatabaseType,
+  db: Db,
   records: readonly MigrationRecord[],
   options: MigrationRunnerOptions,
 ): Promise<void> {
@@ -150,7 +151,7 @@ async function runLatestDownMigration(
 }
 
 function runPendingMigrationsSync(
-  db: DatabaseType,
+  db: Db,
   records: readonly MigrationRecord[],
 ): void {
   const applied = getAppliedMigrations(db);
@@ -170,7 +171,7 @@ function runPendingMigrationsSync(
 }
 
 function runLatestDownMigrationSync(
-  db: DatabaseType,
+  db: Db,
   records: readonly MigrationRecord[],
 ): void {
   const row = db.prepare(`
@@ -193,7 +194,7 @@ function runLatestDownMigrationSync(
   revertMigration();
 }
 
-function getAppliedMigrations(db: DatabaseType): Map<string, string> {
+function getAppliedMigrations(db: Db): Map<string, string> {
   const rows = db.prepare(`
     SELECT filename, applied_at
       FROM migrations

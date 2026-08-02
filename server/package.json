@@ -13,6 +13,7 @@
   "dependencies": {
     "@freellmapi/shared": "*",
     "@huggingface/hub": "^2.13.2",
+    "dotenv": "^17.4.2",
     "socks-proxy-agent": "^10.0.0",
     "undici": "^6.21.0",
     "zod": "^3.25.76"

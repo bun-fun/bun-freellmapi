@@ -6,11 +6,12 @@ import {
 } from './router.js';
 import {
   recordRequest, recordTokens, setCooldown, getCooldownDurationForLimit,
+  getCooldownDecisionForLimit,
   PAYMENT_REQUIRED_COOLDOWN_MS, MODEL_FORBIDDEN_COOLDOWN_MS,
 } from './ratelimit.js';
 import { logRequest } from '../lib/request-log.js';
 import {
-  isRetryableError, isPaymentRequiredError,
+  isRetryableError, isRateLimitSignal, isPaymentRequiredError,
   isModelNotFoundError, isModelAccessForbiddenError,
 } from '../lib/error-classify.js';
 import { contentToString } from '../lib/content.js';
@@ -131,6 +132,23 @@ export function setSavedFusionConfig(input: SavedFusionConfig): SavedFusionConfi
   };
   setSetting(SAVED_FUSION_KEY, JSON.stringify(normalized));
   return normalized;
+}
+
+export function pruneUnavailableSavedFusionConfig(): SavedFusionConfig {
+  const raw = getSetting(SAVED_FUSION_KEY);
+  if (!raw) return getSavedFusionConfig();
+
+  const saved = getSavedFusionConfig();
+  const models = saved.models.filter(savedModelId => resolveFusionCandidate(savedModelId) != null);
+  const judge = saved.judge && resolveFusionCandidate(saved.judge) != null ? saved.judge : null;
+
+  if (models.length === saved.models.length && judge === saved.judge) return saved;
+
+  return setSavedFusionConfig({
+    ...saved,
+    models,
+    judge,
+  });
 }
 
 /**
@@ -257,19 +275,25 @@ async function runModelCall(
       if (isRetryableError(err)) {
         if (isModelNotFoundError(err) || isModelAccessForbiddenError(err)) skipModels.add(route.modelDbId);
         skipKeys.add(`${route.platform}:${route.modelId}:${route.keyId}`);
-        setCooldown(
-          route.platform, route.modelId, route.keyId,
-          isPaymentRequiredError(err)
-            ? PAYMENT_REQUIRED_COOLDOWN_MS
-            : isModelAccessForbiddenError(err)
-            ? MODEL_FORBIDDEN_COOLDOWN_MS
-            : getCooldownDurationForLimit(route.platform, route.modelId, route.keyId, { rpd: route.rpdLimit, tpd: route.tpdLimit }, err.retryAfterMs),
-        );
+        // Provenance mirrors cooldownDecisionForError (lib/fallback-loop.ts):
+        // credit/tier benches are never probe-recovered, Retry-After-backed
+        // ones only when our heuristic outlasted the provider's own retry time.
+        const decision = isPaymentRequiredError(err)
+          ? { durationMs: PAYMENT_REQUIRED_COOLDOWN_MS, source: 'credit' as const }
+          : isModelAccessForbiddenError(err)
+          ? { durationMs: MODEL_FORBIDDEN_COOLDOWN_MS, source: 'tier' as const }
+          : getCooldownDecisionForLimit(route.platform, route.modelId, route.keyId, { rpd: route.rpdLimit, tpd: route.tpdLimit }, err.retryAfterMs, { quotaSignal: isRateLimitSignal(err) });
+        setCooldown(route.platform, route.modelId, route.keyId, decision.durationMs, decision.source);
         recordRateLimitHit(route.modelDbId);
         continue;
       }
       // Non-retryable (auth, validation) — this slot/judge is done.
       break;
+    } finally {
+      // Panel slots run concurrently, so a leaked lease here would starve the
+      // rest of the panel of its own keys' concurrency budget. The route object
+      // stays usable as a data carrier after release.
+      route.release?.();
     }
   }
 
@@ -343,16 +367,19 @@ async function runJudgeStreaming(
       if (isRetryableError(err)) {
         if (isModelNotFoundError(err) || isModelAccessForbiddenError(err)) skipModels.add(route.modelDbId);
         skipKeys.add(`${route.platform}:${route.modelId}:${route.keyId}`);
-        setCooldown(
-          route.platform, route.modelId, route.keyId,
-          isPaymentRequiredError(err) ? PAYMENT_REQUIRED_COOLDOWN_MS
-            : isModelAccessForbiddenError(err) ? MODEL_FORBIDDEN_COOLDOWN_MS
-            : getCooldownDurationForLimit(route.platform, route.modelId, route.keyId, { rpd: route.rpdLimit, tpd: route.tpdLimit }, err.retryAfterMs),
-        );
+        // Same provenance mapping as the non-stream path above.
+        const decision = isPaymentRequiredError(err)
+          ? { durationMs: PAYMENT_REQUIRED_COOLDOWN_MS, source: 'credit' as const }
+          : isModelAccessForbiddenError(err)
+          ? { durationMs: MODEL_FORBIDDEN_COOLDOWN_MS, source: 'tier' as const }
+          : getCooldownDecisionForLimit(route.platform, route.modelId, route.keyId, { rpd: route.rpdLimit, tpd: route.tpdLimit }, err.retryAfterMs, { quotaSignal: isRateLimitSignal(err) });
+        setCooldown(route.platform, route.modelId, route.keyId, decision.durationMs, decision.source);
         recordRateLimitHit(route.modelDbId);
         continue;
       }
       break;
+    } finally {
+      route.release?.();
     }
   }
   return { ok: false, error: lastError ?? 'no available key for judge' };
@@ -419,7 +446,7 @@ export function diversifyChain(ordered: FusionCandidate[]): FusionCandidate[] {
  * both the panel and its refills span genuinely different perspectives before
  * doubling up on either axis.
  */
-function selectPanel(config: FusionConfig, requirements: { requireTools?: boolean } = {}): { panel: FusionCandidate[]; overflow: FusionCandidate[]; dropped: string[] } {
+function selectPanel(config: FusionConfig, requirements: { requireTools?: boolean; estimatedTokens: number }): { panel: FusionCandidate[]; overflow: FusionCandidate[]; dropped: string[] } {
   const maxK = panelMaxK();
 
   if (config.models && config.models.length > 0) {
@@ -440,7 +467,10 @@ function selectPanel(config: FusionConfig, requirements: { requireTools?: boolea
   }
 
   const k = Math.min(Math.max(config.k ?? panelDefaultK(), 1), maxK);
-  const ordered = getOrderedFusionChain().filter(c => !requirements.requireTools || c.supportsTools);
+  // Size-aware: the chain excludes models that cannot hold a prompt this large,
+  // so a too-small model never claims a slot it is guaranteed to fail.
+  const ordered = getOrderedFusionChain(requirements.estimatedTokens)
+    .filter(c => !requirements.requireTools || c.supportsTools);
 
   // Diversity-first ordering of the whole servable chain along provider AND
   // model family (see diversifyChain). The first K are the panel; the rest are
@@ -531,7 +561,7 @@ export async function runFusion(params: {
   const strategy = config.strategy ?? 'synthesize';
 
   const requireTools = (options.tools?.length ?? 0) > 0;
-  const { panel, overflow, dropped } = selectPanel(config, { requireTools });
+  const { panel, overflow, dropped } = selectPanel(config, { requireTools, estimatedTokens });
   if (panel.length === 0) {
     throw new FusionError(
       'fusion: no usable models for the panel. Provide `fusion.models` with enabled model ids, or enable models in the Fallback Chain.',
@@ -678,7 +708,15 @@ export async function runFusion(params: {
           const cand = resolveFusionCandidate(config.judge!);
           return cand ? routePinnedModel(cand.modelDbId, judgeEstimate, skipKeys) : null;
         }
-      : (skipKeys: Set<string>, skipModels: Set<number>) => routeRequest(judgeEstimate, skipKeys.size ? skipKeys : undefined, undefined, false, false, skipModels.size ? skipModels : undefined);
+      : (skipKeys: Set<string>, skipModels: Set<number>) => routeRequest(
+          judgeEstimate, skipKeys.size ? skipKeys : undefined, undefined, false, false,
+          skipModels.size ? skipModels : undefined, undefined,
+          // The judge writes the final answer the client receives, so a
+          // structured-output request must not land it on a platform whose
+          // policy drops response_format (kilo) — the schema would never even
+          // reach the model. Mirrors the non-fusion routing (#516).
+          options.response_format !== undefined,
+        );
 
     // Stream the judge when the caller wants live tokens (Playground); otherwise
     // a single buffered call (plain API clients hitting fusion non-streaming).

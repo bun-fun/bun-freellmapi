@@ -1,4 +1,4 @@
-import type { DatabaseType } from '../index.js';
+import type { Db } from '../types.js';
 
 /**
  * Roll up request analytics into two durable stores so UI totals stay accurate
@@ -15,7 +15,7 @@ import type { DatabaseType } from '../index.js';
  * this migration. Lifetime counters start counting from "now" — rows pruned
  * before this migration are unrecoverable from the aggregate.
  */
-function tableExists(db: DatabaseType, name: string): boolean {
+function tableExists(db: Db, name: string): boolean {
   return !!db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
     .get(name);
@@ -26,7 +26,7 @@ function hourKey(createdAt: string): string {
   return createdAt.slice(0, 13) + ':00:00';
 }
 
-export function up(db: DatabaseType): void {
+export function up(db: Db): void {
   // Hourly aggregate table. `hour` is the primary key so the same-hour upsert
   // is a single-row write. We never update tokens on a partial failure, so
   // success/error counts and token sums stay consistent.
@@ -108,7 +108,7 @@ export function up(db: DatabaseType): void {
   }
 }
 
-export function down(db: DatabaseType): void {
+export function down(db: Db): void {
   db.prepare(`DROP INDEX IF EXISTS idx_request_hourly_hour`).run();
   db.prepare(`DROP TABLE IF EXISTS request_hourly`).run();
   db.prepare(`DELETE FROM settings WHERE key IN (

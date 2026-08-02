@@ -3,7 +3,7 @@ import type { Express } from 'express';
 import { createApp } from '../../app.js';
 import { initDb, getDb, getUnifiedApiKey } from '../../db/index.js';
 import { encrypt } from '../../lib/crypto.js';
-import { setUnifyEnabled } from '../../services/model-groups.js';
+import { setUnifyEnabled, setUnifyOverrides } from '../../services/model-groups.js';
 import { setRoutingStrategy } from '../../services/router.js';
 import { mintDashboardToken, isGatedApiPath } from '../helpers/auth.js';
 
@@ -82,6 +82,7 @@ describe('Model unification (group the same model across providers)', () => {
     db.prepare('DELETE FROM rate_limit_cooldowns').run();
     db.prepare('DELETE FROM rate_limit_usage').run();
     setUnifyEnabled(true);
+    setUnifyOverrides({ merges: [], splits: [] });
     setRoutingStrategy('priority');
     addModel('groq', 'tum-groq', 'Test Unify Model', 1);
     addModel('cerebras', 'tum-cerebras', 'Test Unify Model', 2);
@@ -208,6 +209,60 @@ describe('Model unification (group the same model across providers)', () => {
 
     expect(status).toBe(429);
     expect(body.choices).toBeUndefined(); // no answer from any model
+  });
+
+  it('pinning "platform:model_id" hard-pins that provider — no cross-provider failover (#580)', async () => {
+    const orig = global.fetch;
+    vi.spyOn(global, 'fetch').mockImplementation(async (url: any, init?: any) => {
+      const u = String(url);
+      if (u.includes('api.groq.com')) return new Response(JSON.stringify({ error: { message: 'rate limited' } }), { status: 429 });
+      if (u.includes('api.cerebras.ai')) return completion('tum-cerebras', 'from cerebras');
+      return orig(url, init);
+    });
+
+    // The fully-qualified id routes to exactly that provider (priority 2 —
+    // priority 1 Groq must NOT be used even though it would sort first).
+    const pinned = await request(app, 'POST', '/v1/chat/completions', {
+      model: 'cerebras:tum-cerebras',
+      messages: [{ role: 'user', content: 'hi' }],
+    }, authHeaders());
+    expect(pinned.status).toBe(200);
+    expect(pinned.headers.get('x-routed-via')).toContain('cerebras');
+
+    // And when the pinned provider is down, the request FAILS instead of
+    // silently serving from a sibling provider.
+    const down = await request(app, 'POST', '/v1/chat/completions', {
+      model: 'groq:tum-groq',
+      messages: [{ role: 'user', content: 'hi' }],
+    }, authHeaders());
+    expect(down.status).toBe(429);
+    expect(down.headers.get('x-routed-via') ?? '').not.toContain('cerebras');
+
+    // An unknown platform:model_id keeps the not-found behavior.
+    const unknown = await request(app, 'POST', '/v1/chat/completions', {
+      model: 'nope:tum-groq',
+      messages: [{ role: 'user', content: 'hi' }],
+    }, authHeaders());
+    expect(unknown.status).toBe(404);
+  });
+
+  it('PUT /api/settings/unify splits override un-merges one provider copy (the dashboard opt-out, #580)', async () => {
+    const put = await request(app, 'PUT', '/api/settings/unify', {
+      overrides: { merges: [], splits: [{ member: 'groq:tum-groq' }] },
+    });
+    expect(put.status).toBe(200);
+    expect(put.body.overrides.splits).toEqual([{ member: 'groq:tum-groq' }]);
+
+    // The split copy is advertised as its own logical model now.
+    const { body } = await request(app, 'GET', '/v1/models', undefined, authHeaders());
+    const ours = body.data.filter((m: any) => m.name === 'Test Unify Model');
+    expect(ours).toHaveLength(2);
+
+    // Removing the split (the UI's undo) collapses them again.
+    const undo = await request(app, 'PUT', '/api/settings/unify', { overrides: { merges: [], splits: [] } });
+    expect(undo.status).toBe(200);
+    const after = await request(app, 'GET', '/v1/models', undefined, authHeaders());
+    expect(after.body.data.filter((m: any) => m.name === 'Test Unify Model')).toHaveLength(1);
   });
 
   it('unification is always on: the toggle was removed, so /v1/models stays collapsed even after setUnifyEnabled(false)', async () => {

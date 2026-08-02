@@ -1,16 +1,23 @@
 {
-  "name": "freellmapi",
+  "name": "@freellmapi/monorepo",
   "private": true,
   "workspaces": [
     "shared",
     "server",
-    "client"
+    "client",
+    "cli"
   ],
   "scripts": {
     "dev": "cd server && bun run dev",
     "test": "cd server && bun test && cd ../client && bun test",
     "build": "cd client && bun run build && cd ../server && bun run build",
-    "build:server": "cd server && bun run build"
+    "build:server": "cd server && bun run build",
+    "test:migrations": "cd server && bun run test:migrations",
+    "db:migration:up": "cd server && bun run db:migration:up",
+    "db:migration:down": "cd server && bun run db:migration:down",
+    "db:migration:fresh": "cd server && bun run db:migration:fresh",
+    "db:migration:status": "cd server && bun run db:migration:status",
+    "db:migration:create": "cd server && bun run db:migration:create"
   },
   "devDependencies": {
     "@types/bun": "latest"

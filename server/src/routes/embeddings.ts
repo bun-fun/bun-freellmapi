@@ -2,8 +2,9 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { getDb, setSetting } from '../db/index.js';
-import { encrypt, decrypt, maskKey } from '../lib/crypto.js';
+import { decrypt, maskKey } from '../lib/crypto.js';
 import { deleteUnusedCustomEndpointKey } from '../lib/custom-provider-cleanup.js';
+import { resolveCustomEndpointKey, customEndpointKeyIds } from '../services/custom-endpoint.js';
 import {
   listEmbeddingModels,
   getDefaultFamily,
@@ -136,47 +137,22 @@ embeddingsRouter.post('/custom', async (req: Request, res: Response) => {
   }
 
   const upsert = db.transaction(() => {
-    let keyId: number;
-    let storedKeyForMask = probeKey;
-    if (existingKey) {
-      keyId = existingKey.id;
-      if (providedKey) {
-        const { encrypted, iv, authTag } = encrypt(providedKey);
-        db.prepare(`
-          UPDATE api_keys
-             SET label = COALESCE(?, label),
-                 encrypted_key = ?,
-                 iv = ?,
-                 auth_tag = ?,
-                 status = 'unknown',
-                 enabled = 1
-           WHERE id = ?
-        `).run(label ?? null, encrypted, iv, authTag, keyId);
-        storedKeyForMask = providedKey;
-      } else {
-        db.prepare(`
-          UPDATE api_keys
-             SET label = COALESCE(?, label), status = 'unknown', enabled = 1
-           WHERE id = ?
-        `).run(label ?? null, keyId);
-      }
-    } else {
-      const keyToStore = providedKey ?? 'no-key';
-      const { encrypted, iv, authTag } = encrypt(keyToStore);
-      const key = db.prepare(`
-        INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, base_url)
-        VALUES ('custom', ?, ?, ?, ?, 'unknown', 1, ?)
-      `).run(label ?? 'Custom', encrypted, iv, authTag, baseUrl);
-      keyId = Number(key.lastInsertRowid);
-      storedKeyForMask = keyToStore;
-    }
+    // A new secret for a known endpoint is an ADDITIONAL credential, never a
+    // replacement for the stored one (#619).
+    const { keyId, storedKey: storedKeyForMask } = resolveCustomEndpointKey(db, baseUrl, providedKey, label);
+    const endpointKeyIds = customEndpointKeyIds(db, keyId);
 
     const existingModel = db.prepare(`
-      SELECT id, priority
+      SELECT id, priority, key_id
         FROM embedding_models
        WHERE platform = 'custom' AND model_id = ?
        LIMIT 1
-    `).get(modelId) as { id: number; priority: number } | undefined;
+    `).get(modelId) as { id: number; priority: number; key_id: number | null } | undefined;
+    // A model already on this endpoint keeps the key it has; only a move to a
+    // different endpoint re-binds it.
+    const bindKeyId = existingModel?.key_id != null && endpointKeyIds.has(existingModel.key_id)
+      ? existingModel.key_id
+      : keyId;
     const priority = existingModel?.priority ?? (
       (db.prepare('SELECT COALESCE(MAX(priority), 0) AS maxPriority FROM embedding_models WHERE family = ?')
         .get(family) as { maxPriority: number }).maxPriority + 1
@@ -194,7 +170,7 @@ embeddingsRouter.post('/custom', async (req: Request, res: Response) => {
                quota_label = ?,
                key_id = ?
          WHERE id = ?
-      `).run(family, displayName, dimensions, parsed.data.maxInputTokens ?? null, priority, quotaLabel, keyId, existingModel.id);
+      `).run(family, displayName, dimensions, parsed.data.maxInputTokens ?? null, priority, quotaLabel, bindKeyId, existingModel.id);
       return { modelDbId: existingModel.id, keyId, storedKeyForMask };
     }
 
@@ -202,7 +178,7 @@ embeddingsRouter.post('/custom', async (req: Request, res: Response) => {
       INSERT INTO embedding_models
         (family, platform, model_id, display_name, dimensions, max_input_tokens, priority, enabled, quota_label, key_id)
       VALUES (?, 'custom', ?, ?, ?, ?, ?, 1, ?, ?)
-    `).run(family, modelId, displayName, dimensions, parsed.data.maxInputTokens ?? null, priority, quotaLabel, keyId);
+    `).run(family, modelId, displayName, dimensions, parsed.data.maxInputTokens ?? null, priority, quotaLabel, bindKeyId);
     return { modelDbId: Number(model.lastInsertRowid), keyId, storedKeyForMask };
   });
 
@@ -286,6 +262,13 @@ embeddingsRouter.delete('/custom/:id', (req: Request, res: Response) => {
 
 // Per-family usage: requests today (most embedding quotas are daily/RPM) and
 // tokens this calendar month, from the tagged request log.
+//
+// Deliberately no budget denominator. `models.monthly_token_budget` gives chat
+// a real number to divide by; `embedding_models` only carries a free-text
+// `quota_label` ("10K neurons/day (shared)", "$0.10/mo credits"), and there is
+// no honest conversion from Cloudflare Neurons or dollar credits to tokens. So
+// the summary reports what was actually spent and shows each provider's quota
+// label verbatim, rather than inventing a ceiling to draw a percentage against.
 embeddingsRouter.get('/usage', (_req: Request, res: Response) => {
   const db = getDb();
   const usage = db.prepare(`
@@ -302,11 +285,28 @@ embeddingsRouter.get('/usage', (_req: Request, res: Response) => {
     GROUP BY em.family
   `).all() as { family: string; requests_today: number; tokens_month: number }[];
 
+  // One representative provider per family for the legend: the highest-priority
+  // enabled row, so the label matches whoever actually serves the family first.
+  const meta = db.prepare(`
+    SELECT family, platform, quota_label
+    FROM embedding_models
+    WHERE enabled = 1
+    ORDER BY priority ASC
+  `).all() as { family: string; platform: string; quota_label: string | null }[];
+  const metaByFamily = new Map<string, { platform: string; quota_label: string | null }>();
+  for (const m of meta) if (!metaByFamily.has(m.family)) metaByFamily.set(m.family, m);
+
+  const families = usage.map(u => ({
+    family: u.family,
+    requestsToday: u.requests_today,
+    tokensMonth: u.tokens_month,
+    platform: metaByFamily.get(u.family)?.platform ?? null,
+    quotaLabel: metaByFamily.get(u.family)?.quota_label ?? null,
+  }));
+
   res.json({
-    families: usage.map(u => ({
-      family: u.family,
-      requestsToday: u.requests_today,
-      tokensMonth: u.tokens_month,
-    })),
+    families,
+    totalTokensMonth: families.reduce((s, f) => s + f.tokensMonth, 0),
+    totalRequestsToday: families.reduce((s, f) => s + f.requestsToday, 0),
   });
 });

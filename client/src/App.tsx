@@ -1,16 +1,78 @@
-import { useEffect, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, NavLink } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Button } from '@/components/ui/button'
+import { useState, type ReactNode } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, NavLink, Link, useLocation, useNavigate } from 'react-router-dom'
+import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ChevronDown, KeyRound, LogOut, Menu, MoreHorizontal, Search, Settings, Sparkles } from 'lucide-react'
+import { buttonVariants } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { AuthGate, ChangeCredentialsModal } from '@/components/auth-gate'
+import { CommandPalette } from '@/components/command-palette'
+import { openCommandPalette } from '@/components/command-palette-state'
+import { ErrorBoundary } from '@/components/error-boundary'
+import { SettingsDialog } from '@/components/settings-dialog'
+import { Toaster } from '@/components/toaster'
+import { usePremium } from '@/hooks/use-premium'
+import { I18nProvider, useI18n } from '@/i18n'
+import { logout } from '@/lib/api'
+import { toast } from '@/lib/toast'
+import { ThemeProvider } from '@/theme'
 import KeysPage from '@/pages/KeysPage'
 import PlaygroundPage from '@/pages/PlaygroundPage'
 import FallbackPage from '@/pages/FallbackPage'
+import ModelDetailPage from '@/pages/ModelDetailPage'
+import FusionPage from '@/pages/FusionPage'
+import EmbeddingsPage from '@/pages/EmbeddingsPage'
+import ImagePage from '@/pages/ImagePage'
+import AudioPage from '@/pages/AudioPage'
+import MediaDetailPage from '@/pages/MediaDetailPage'
+import EmbeddingDetailPage from '@/pages/EmbeddingDetailPage'
 import AnalyticsPage from '@/pages/AnalyticsPage'
-import LoginPage from '@/pages/LoginPage'
-import SettingsPage from '@/pages/SettingsPage'
-import { useAuth } from '@/lib/auth'
+import PremiumPage from '@/pages/PremiumPage'
+import NotFoundPage from '@/pages/NotFoundPage'
+import AgentsPage from '@/pages/AgentsPage'
 
-const queryClient = new QueryClient()
+// Every failed mutation surfaces as an error toast, so no action fails
+// silently. A page that already shows the failure inline can opt out with
+// `meta: { silenceToast: true }` on the mutation.
+const queryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    onError: (error, _variables, _context, mutation) => {
+      if (mutation.meta?.silenceToast) return
+      toast.error(error instanceof Error ? error.message : String(error))
+    },
+  }),
+})
+
+const navItems = [
+  { to: '/models', labelKey: 'nav.models' },
+  { to: '/playground', labelKey: 'nav.playground' },
+  { to: '/keys', labelKey: 'nav.keys' },
+  { to: '/agents', labelKey: 'nav.agents' },
+  { to: '/analytics', labelKey: 'nav.analytics' },
+  { to: '/premium', labelKey: 'nav.premium' },
+]
+
+// The five modality pages behind "Models"; surfaced in the nav dropdown and
+// the mobile submenu so Fusion/Embeddings/Image/Audio are discoverable without
+// first landing on the chat table.
+const modelItems = [
+  { to: '/models/chat', labelKey: 'models.chatModelsTab' },
+  { to: '/models/embeddings', labelKey: 'models.embeddingsTab' },
+  { to: '/models/image', labelKey: 'models.imageTab' },
+  { to: '/models/audio', labelKey: 'models.audioTab' },
+  { to: '/models/fusion', labelKey: 'models.fusionTab' },
+]
+
+const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
 
 function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
   return (
@@ -29,128 +91,293 @@ function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
   )
 }
 
-function DarkModeToggle() {
-  const [dark, setDark] = useState(() =>
-    typeof window !== 'undefined' && document.documentElement.classList.contains('dark')
-  )
-
-  useEffect(() => {
-    const stored = localStorage.getItem('theme')
-    if (stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      document.documentElement.classList.add('dark')
-      setDark(true)
-    }
-  }, [])
-
-  function toggle() {
-    const next = !dark
-    setDark(next)
-    document.documentElement.classList.toggle('dark', next)
-    localStorage.setItem('theme', next ? 'dark' : 'light')
-  }
-
-  return (
-    <Button variant="ghost" size="sm" onClick={toggle} aria-label="Toggle theme">
-      {dark ? (
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
-      ) : (
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
-      )}
-    </Button>
-  )
-}
-
 function Brand() {
   return (
-    <div className="flex items-center gap-2">
+    <Link to="/" className="flex items-center gap-2 transition-opacity hover:opacity-70">
       <span className="inline-block size-2 rounded-full bg-foreground" />
       <span className="font-semibold tracking-tight text-sm">FreeLLMAPI</span>
-    </div>
+    </Link>
   )
 }
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth()
+// True when the dashboard runs inside the desktop shell (Electron preload
+// sets this). The navbar then doubles as the window title bar: draggable,
+// padded for the macOS traffic lights, and without the web-only Sign out.
+const isDesktopApp = typeof window !== 'undefined'
+  && (window as Window & { __FREEAPI_DESKTOP__?: boolean }).__FREEAPI_DESKTOP__ === true
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="size-8 border-2 border-foreground/20 border-t-foreground rounded-full animate-spin mx-auto" />
-      </div>
-    )
-  }
+// The preload's own early classList.add can be lost (it may run before this
+// document exists), so the client claims the class itself at module load —
+// before the first React paint — keeping html.desktop CSS (transparent body,
+// glass backdrop) reliable.
+if (isDesktopApp) {
+  document.documentElement.classList.add('desktop')
+}
 
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />
-  }
+function AccountMenuItems({
+  showUpgrade,
+  upgradeLabel,
+  settingsLabel,
+  signOutLabel,
+  changeEmailLabel,
+  changePasswordLabel,
+  onUpgrade,
+  onOpenSettings,
+  onChangeEmail,
+  onChangePassword,
+}: {
+  showUpgrade: boolean
+  upgradeLabel: string
+  settingsLabel: string
+  signOutLabel: string
+  changeEmailLabel: string
+  changePasswordLabel: string
+  onUpgrade: () => void
+  onOpenSettings: () => void
+  onChangeEmail: () => void
+  onChangePassword: () => void
+}) {
+  return (
+    <>
+      {showUpgrade && (
+        <DropdownMenuItem onClick={onUpgrade}>
+          <Sparkles />
+          {upgradeLabel}
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem onClick={onOpenSettings}>
+        <Settings />
+        {settingsLabel}
+      </DropdownMenuItem>
+      {/* Desktop signs in with a hidden local account, so it has no credentials
+          to change and no session to end. */}
+      {!isDesktopApp && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onChangeEmail}>
+            <span className="flex size-4 items-center justify-center font-serif text-xs font-bold">@</span>
+            {changeEmailLabel}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onChangePassword}>
+            <KeyRound />
+            {changePasswordLabel}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => logout()}>
+            <LogOut />
+            {signOutLabel}
+          </DropdownMenuItem>
+        </>
+      )}
+    </>
+  )
+}
 
-  return <>{children}</>
+function Navbar() {
+  const { t } = useI18n()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [credentialsMode, setCredentialsMode] = useState<'password' | 'email' | null>(null)
+  const { data: premium, licensed, isLoading: premiumLoading, isError: premiumError } = usePremium()
+  const showUpgrade = Boolean(premium) && !licensed && !premiumLoading && !premiumError
+
+  return (
+    <>
+      <header
+        // In the desktop shell the body backdrop is already translucent glass;
+        // a lighter wash keeps the title bar from looking more solid than the page.
+        className={`sticky top-0 z-40 border-b backdrop-blur ${isDesktopApp ? 'bg-background/45' : 'bg-background/80'}`}
+        style={isDesktopApp ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
+      >
+        <div
+          // Physical pl (not logical ps): the gutter reserves the macOS
+          // traffic lights, which stay top-left even when an RTL locale
+          // flips the document direction.
+          className={`mx-auto flex max-w-6xl items-center px-4 sm:px-6 ${isDesktopApp ? 'pl-20 sm:pl-20' : ''}`}
+          style={isDesktopApp ? { minHeight: 52 } : undefined}
+        >
+          <Brand />
+          <nav
+            className="ms-10 hidden items-center gap-6 md:flex"
+            style={isDesktopApp ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined}
+          >
+            {navItems.map((item) =>
+              item.to === '/models' ? (
+                // Split control: the label navigates, the chevron reveals the
+                // five modality pages hiding behind "Models".
+                <div key={item.to} className="flex items-center gap-0.5">
+                  <NavItem to={item.to}>{t(item.labelKey)}</NavItem>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      aria-label={t('nav.modelsMenu')}
+                      className="rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <ChevronDown className="size-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-44">
+                      {modelItems.map((model) => (
+                        <DropdownMenuItem key={model.to} onClick={() => navigate(model.to)}>
+                          {t(model.labelKey)}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              ) : (
+                <NavItem key={item.to} to={item.to}>
+                  {t(item.labelKey)}
+                </NavItem>
+              ),
+            )}
+          </nav>
+          <div
+            className="ms-auto hidden items-center gap-1 md:flex"
+            style={isDesktopApp ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined}
+          >
+            <button
+              type="button"
+              onClick={openCommandPalette}
+              aria-label={t('palette.title')}
+              className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+            >
+              <Search className="size-3.5" />
+              <kbd className="text-[10px] text-muted-foreground">{isMac ? '⌘K' : 'Ctrl K'}</kbd>
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={buttonVariants({ variant: 'ghost', size: 'icon' })}
+                aria-label={t('nav.openMenu')}
+              >
+                <MoreHorizontal />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <AccountMenuItems
+                  showUpgrade={showUpgrade}
+                  upgradeLabel={t('nav.upgrade')}
+                  settingsLabel={t('nav.settings')}
+                  signOutLabel={t('nav.signOut')}
+                  changeEmailLabel={t('auth.changeEmail')}
+                  changePasswordLabel={t('auth.changePassword')}
+                  onUpgrade={() => navigate('/premium')}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onChangeEmail={() => setCredentialsMode('email')}
+                  onChangePassword={() => setCredentialsMode('password')}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="ms-auto md:hidden">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={buttonVariants({ variant: 'ghost', size: 'icon' })}
+                aria-label={t('nav.openMenu')}
+              >
+                <Menu />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuGroup>
+                  {navItems.map((item) =>
+                    item.to === '/models' ? (
+                      <DropdownMenuSub key={item.to}>
+                        <DropdownMenuSubTrigger
+                          className={location.pathname.startsWith('/models') ? 'bg-accent text-accent-foreground font-medium' : undefined}
+                        >
+                          {t(item.labelKey)}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent>
+                          {modelItems.map((model) => (
+                            <DropdownMenuItem key={model.to} onClick={() => navigate(model.to)}>
+                              {t(model.labelKey)}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    ) : (
+                      <DropdownMenuItem
+                        key={item.to}
+                        onClick={() => navigate(item.to)}
+                        className={location.pathname === item.to ? 'bg-accent text-accent-foreground font-medium' : undefined}
+                      >
+                        {t(item.labelKey)}
+                      </DropdownMenuItem>
+                    ),
+                  )}
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <AccountMenuItems
+                  showUpgrade={showUpgrade}
+                  upgradeLabel={t('nav.upgrade')}
+                  settingsLabel={t('nav.settings')}
+                  signOutLabel={t('nav.signOut')}
+                  changeEmailLabel={t('auth.changeEmail')}
+                  changePasswordLabel={t('auth.changePassword')}
+                  onUpgrade={() => navigate('/premium')}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onChangeEmail={() => setCredentialsMode('email')}
+                  onChangePassword={() => setCredentialsMode('password')}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+      </header>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      {credentialsMode && (
+        <ChangeCredentialsModal mode={credentialsMode} onClose={() => setCredentialsMode(null)} />
+      )}
+    </>
+  )
+}
+
+// Keyed by pathname so navigating away from a crashed page resets the boundary.
+function PageBoundary({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  return <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
 }
 
 function App() {
-  const { isAuthenticated, isLoading, user, logout } = useAuth();
-
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter basename={import.meta.env.BASE_URL}>
-        <div className="min-h-screen bg-background">
-          {isLoading ? (
-            <div className="min-h-screen flex items-center justify-center bg-background">
-              <div className="size-8 border-2 border-foreground/20 border-t-foreground rounded-full animate-spin" />
-            </div>
-          ) : (
-            <>
-              {isAuthenticated && (
-                <header className="sticky top-0 z-40 bg-background/80 backdrop-blur border-b">
-                  <div className="max-w-6xl mx-auto px-6 flex items-center">
-                    <Brand />
-                    <nav className="flex items-center gap-6 ml-10">
-                      <NavItem to="/playground">Playground</NavItem>
-                      <NavItem to="/keys">Keys</NavItem>
-                      <NavItem to="/fallback">Fallback</NavItem>
-                      <NavItem to="/analytics">Analytics</NavItem>
-                    </nav>
-                    <div className="ml-auto py-2 flex items-center gap-2">
-                      <NavItem to="/settings">Settings</NavItem>
-                      <span className="text-xs text-muted-foreground">{user?.username}</span>
-                      <Button variant="ghost" size="sm" onClick={logout}>
-                        Logout
-                      </Button>
-                      <DarkModeToggle />
-                    </div>
-                  </div>
-                </header>
-              )}
-              <main className={isAuthenticated ? "max-w-6xl mx-auto px-6 py-8" : ""}>
-                <Routes>
-                  <Route path="/login" element={
-                    isAuthenticated ? <Navigate to="/playground" replace /> : <LoginPage />
-                  } />
-                  <Route path="/" element={
-                    <ProtectedRoute><Navigate to="/playground" replace /></ProtectedRoute>
-                  } />
-                  <Route path="/playground" element={
-                    <ProtectedRoute><PlaygroundPage /></ProtectedRoute>
-                  } />
-                  <Route path="/keys" element={
-                    <ProtectedRoute><KeysPage /></ProtectedRoute>
-                  } />
-                  <Route path="/fallback" element={
-                    <ProtectedRoute><FallbackPage /></ProtectedRoute>
-                  } />
-                  <Route path="/analytics" element={
-                    <ProtectedRoute><AnalyticsPage /></ProtectedRoute>
-                  } />
-                  <Route path="/settings" element={
-                    <ProtectedRoute><SettingsPage /></ProtectedRoute>
-                  } />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </main>
-            </>
-          )}
-        </div>
-      </BrowserRouter>
+      <ThemeProvider>
+        <I18nProvider>
+          <BrowserRouter basename={import.meta.env.BASE_URL}>
+            <AuthGate>
+              <div className={`min-h-screen ${isDesktopApp ? 'desktop-backdrop' : 'bg-background'}`}>
+                <Navbar />
+                <main className="mx-auto max-w-6xl px-6 py-8">
+                  <PageBoundary>
+                    <Routes>
+                      <Route path="/" element={<Navigate to="/models/chat" replace />} />
+                      <Route path="/models" element={<Navigate to="/models/chat" replace />} />
+                      <Route path="/models/chat" element={<FallbackPage />} />
+                      <Route path="/models/chat/:id" element={<ModelDetailPage />} />
+                      <Route path="/models/fusion" element={<FusionPage />} />
+                      <Route path="/models/embeddings" element={<EmbeddingsPage />} />
+                      <Route path="/models/embeddings/:id" element={<EmbeddingDetailPage />} />
+                      <Route path="/models/image" element={<ImagePage />} />
+                      <Route path="/models/image/:id" element={<MediaDetailPage modality="image" />} />
+                      <Route path="/models/audio" element={<AudioPage />} />
+                      <Route path="/models/audio/:id" element={<MediaDetailPage modality="audio" />} />
+                      <Route path="/models/transcription/:id" element={<MediaDetailPage modality="transcription" />} />
+                      <Route path="/playground" element={<PlaygroundPage />} />
+                      <Route path="/keys" element={<KeysPage />} />
+                      <Route path="/agents" element={<AgentsPage />} />
+                      <Route path="/fallback" element={<Navigate to="/models/chat" replace />} />
+                      <Route path="/analytics" element={<AnalyticsPage />} />
+                      <Route path="/premium" element={<PremiumPage />} />
+                      <Route path="/test" element={<Navigate to="/playground" replace />} />
+                      <Route path="/health" element={<Navigate to="/keys" replace />} />
+                      <Route path="*" element={<NotFoundPage />} />
+                    </Routes>
+                  </PageBoundary>
+                </main>
+                <Toaster />
+                <CommandPalette />
+              </div>
+            </AuthGate>
+          </BrowserRouter>
+        </I18nProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   )
 }

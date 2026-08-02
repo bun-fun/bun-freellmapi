@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getDb } from '../db/index.js';
+// Single shared Retry-After parser (was duplicated here and in providers/base.ts).
+import { parseRetryAfterMs } from '../providers/base.js';
 import type {
   Platform,
   QuotaMetric,
@@ -102,16 +104,6 @@ function parseResetAtFromHeader(raw: string | null, now = Date.now()): string | 
   return new Date(now + parsed * 1000).toISOString();
 }
 
-function parseRetryAfterMs(raw: string | null): number | null {
-  if (!raw) return null;
-  const seconds = Number(raw.trim());
-  if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds * 1000));
-  const asDate = new Date(raw);
-  const ms = asDate.getTime();
-  if (Number.isNaN(ms)) return null;
-  return Math.max(0, ms - Date.now());
-}
-
 function pickBetterSource(existing: QuotaObservationSource | null | undefined, next: QuotaObservationSource): QuotaObservationSource {
   if (!existing) return next;
   return SOURCE_PRIORITY[next] >= SOURCE_PRIORITY[existing] ? next : existing;
@@ -132,7 +124,7 @@ function inferPoolForPlatform(platform: Platform, modelId?: string | null): stri
   if (platform === 'zhipu') return 'zhipu::account';
   if (platform === 'ollama') return 'ollama::cloud';
   if (platform === 'kilo') return 'kilo::anonymous';
-  if (platform === 'pollinations') return 'pollinations::anonymous';
+  if (platform === 'pollinations') return 'pollinations::account';
   if (platform === 'llm7') return 'llm7::anonymous';
   // AI Horde: anonymous requests share one queue priority (the 0000000000 key),
   // so they pool together; a registered key has its own kudos priority but we
@@ -144,11 +136,18 @@ function inferPoolForPlatform(platform: Platform, modelId?: string | null): stri
   if (platform === 'routeway') return 'routeway::free';
   if (platform === 'bazaarlink') return 'bazaarlink::free';
   if (platform === 'ainative') return 'ainative::account';
+  if (platform === 'aion') return 'aion::free';
+  if (platform === 'requesty') return 'requesty::free';
+  if (platform === 'navy') return 'navy::free';
+  if (platform === 'nara') return 'nara::free';
+  if (platform === 'sealion') return 'sealion::free';
+  // ModelScope: one 2000-requests/day quota across the whole account.
+  if (platform === 'modelscope') return 'modelscope::account';
   return normalizedModelId ? `${platform}::${normalizedModelId}` : `${platform}::account`;
 }
 
 function isSharedPool(platform: Platform): boolean {
-  return ['openrouter', 'google', 'groq', 'cerebras', 'sambanova', 'nvidia', 'mistral', 'github', 'cohere', 'cloudflare', 'zhipu', 'ollama', 'kilo', 'pollinations', 'llm7', 'huggingface', 'opencode', 'routeway', 'bazaarlink', 'ainative', 'aihorde'].includes(platform);
+  return ['openrouter', 'google', 'groq', 'cerebras', 'sambanova', 'nvidia', 'mistral', 'github', 'cohere', 'cloudflare', 'zhipu', 'ollama', 'kilo', 'pollinations', 'llm7', 'huggingface', 'opencode', 'routeway', 'bazaarlink', 'ainative', 'aion', 'requesty', 'navy', 'nara', 'sealion', 'modelscope', 'aihorde'].includes(platform);
 }
 
 type HeaderSpec = { metric: QuotaMetric; limit: string; remaining?: string; reset?: string; strategy?: QuotaResetStrategy };
@@ -165,6 +164,17 @@ const HEADER_SPECS: Partial<Record<Platform, HeaderSpec[]>> = {
   openrouter: [
     { metric: 'requests', limit: 'x-ratelimit-limit-requests', remaining: 'x-ratelimit-remaining-requests', reset: 'x-ratelimit-reset-requests', strategy: 'provider_reported' },
     { metric: 'tokens', limit: 'x-ratelimit-limit-tokens', remaining: 'x-ratelimit-remaining-tokens', reset: 'x-ratelimit-reset-tokens', strategy: 'provider_reported' },
+  ],
+  // ModelScope reportedly returns `modelscope-ratelimit-*`-style headers on
+  // authenticated responses. UNCONFIRMED: no real token exists for this
+  // platform yet (auth needs an Alibaba Cloud cn-site binding, #581), and the
+  // keyless probes we could run (401s, unauthenticated /v1/models) carry no
+  // ratelimit headers at all. Absent headers are a no-op in
+  // maybeAddObservation, so a wrong guess here costs nothing; community
+  // testers should dump response headers (see the #581 tester guide) and
+  // correct these names.
+  modelscope: [
+    { metric: 'requests', limit: 'modelscope-ratelimit-requests-limit', remaining: 'modelscope-ratelimit-requests-remaining', reset: 'modelscope-ratelimit-requests-reset', strategy: 'provider_reported' },
   ],
 };
 
@@ -228,7 +238,7 @@ export function parseQuotaObservationsFromResponse(
     }
   }
 
-  const retryAfterMs = parseRetryAfterMs(get('retry-after'));
+  const retryAfterMs = parseRetryAfterMs(get('retry-after')) ?? null;
   if (retryAfterMs !== null) {
     observations.push({
       ...base,
@@ -399,6 +409,24 @@ export function recordQuotaObservationsFromResponse(
     .filter((row): row is ProviderQuotaObservation => row !== null);
 }
 
+// A quota window whose reset_at has passed has replenished at the provider, but
+// remaining_value is only ever written on a fresh observation — so a key that hit
+// remaining=0 reads as "exhausted" forever on the dashboard health view until the
+// next live call (#453). Restore remaining to the known limit (or clear it to
+// unknown when the limit isn't known — `= limit_value` yields NULL in that case)
+// and drop the stale reset_at so the row stops reading as exhausted and this
+// fix-up doesn't recur. Runs on read; a new observation re-populates reset_at.
+function normalizeExpiredQuotaState(db: ReturnType<typeof getDb>): void {
+  db.prepare(`
+    UPDATE provider_quota_state
+       SET remaining_value = limit_value,
+           reset_at = NULL,
+           updated_at = datetime('now')
+     WHERE reset_at IS NOT NULL
+       AND julianday(reset_at) < julianday('now')
+  `).run();
+}
+
 export function getQuotaStateForKeys(): QuotaObservationView[] {
   let db;
   try {
@@ -406,6 +434,7 @@ export function getQuotaStateForKeys(): QuotaObservationView[] {
   } catch {
     return [];
   }
+  normalizeExpiredQuotaState(db);
   return db.prepare(`
     WITH latest AS (
       SELECT

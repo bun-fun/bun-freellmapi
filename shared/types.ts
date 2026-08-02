@@ -1,5 +1,37 @@
 // ---- Platform & Model Types ----
 
+export interface PreviewKey {
+  keyName: string;
+  keyValue: string;
+  detectedPlatform: string | null;
+  prefix: string;
+  isDuplicate?: boolean;
+}
+
+export interface ImportKey {
+  keyName: string;
+  keyValue: string;
+  platform: string;
+}
+
+export interface PreviewResponse {
+  keys: PreviewKey[];
+  total: number;
+  skipped: string[];
+  duplicates: number;
+}
+
+export interface ImportSelectedRequest {
+  keys: ImportKey[];
+}
+
+export interface ImportSelectedResponse {
+  imported: number;
+  skipped: string[];
+  errors: Array<{ key: string; error: string }>;
+  total: number;
+}
+
 // Active platforms — must match server/src/providers/index.ts and
 // server/src/routes/keys.ts PLATFORMS allowlist.
 // Moonshot and MiniMax direct integrations were dropped in migrateModelsV4
@@ -53,6 +85,30 @@ export type Platform =
   // ~10M tokens/month free allocation (no card); quota unverified. Key from
   // ainative.studio.
   | 'ainative'
+  // Aion Labs — OpenAI-compatible aggregator with a no-card free API key.
+  // Catalog rows live in the Oracle catalog (premium now, free after 30 days).
+  | 'aion'
+  // Requesty — OpenAI-compatible router with no-card free models/credits.
+  // Catalog rows live in the Oracle catalog (premium now, free after 30 days).
+  | 'requesty'
+  // NavyAI — OpenAI-compatible unified API. Free plan is 150K tokens/day and
+  // 20 RPM; catalog rows live in the Oracle catalog (premium now, free after 30 days).
+  | 'navy'
+  // NaraRouter — OpenAI-compatible aggregator. Free account key from
+  // router.bynara.id after Telegram channel/link verification; free-plan routes
+  // reset daily and are catalog-managed (premium now, free after 30 days).
+  | 'nara'
+  // SEA-LION (AI Singapore) — OpenAI-compatible first-party API. Free key
+  // (Google sign-in, no card, no region wall) at 10 RPM; catalog rows live in
+  // the Oracle catalog (premium now, free after 30 days).
+  | 'sealion'
+  // ModelScope (魔搭社区, Alibaba) — OpenAI-compatible inference API
+  // (api-inference.modelscope.cn/v1). Free tier is 2000 requests/day
+  // account-wide, but calls only work after the ModelScope account is bound to
+  // an Alibaba Cloud CHINA-site (cn) account with Chinese real-name
+  // verification — tokens mint without binding, then every call 401s. Catalog
+  // rows land after community testing confirms per-model behavior (#581).
+  | 'modelscope'
   // AI Horde — free, community-powered inference (volunteer workers) via an
   // OpenAI-compatible proxy (https://oai.aihorde.net/v1). Queue-based, so calls
   // can take tens of seconds; no tool support; usage is reported as kudos, not
@@ -121,6 +177,14 @@ export interface ApiKeyModel {
   family?: string | null;
 }
 
+/** An active rate-limit cooldown on one model for a key. A key can be healthy
+ *  and enabled yet still skipped by the router because of these. */
+export interface ApiKeyCooldown {
+  modelId: string;
+  expiresAtMs: number;
+  remainingMs: number;
+}
+
 export interface ApiKey {
   id: number;
   platform: Platform;
@@ -129,9 +193,12 @@ export interface ApiKey {
   baseUrl: string | null;
   status: KeyStatus;
   enabled: boolean;
+  keyless: boolean;
   createdAt: string;
   lastCheckedAt: string | null;
+  lastHealthError: string | null;
   models?: ApiKeyModel[];
+  cooldowns?: ApiKeyCooldown[];
 }
 
 export interface ApiKeyCreate {
@@ -255,6 +322,9 @@ export interface ChatCompletionChoice {
   index: number;
   message: ChatMessage;
   finish_reason: string | null;
+  // Present when the client requested logprobs and the provider returned
+  // them; passed through verbatim (provider shapes vary slightly).
+  logprobs?: unknown;
 }
 
 export interface TokenUsage {
@@ -286,6 +356,7 @@ export interface ChatCompletionChunk {
     delta: {
       role?: 'assistant';
       content?: string;
+      reasoning_content?: string;
       tool_calls?: ChatToolCall[];
     };
     finish_reason: string | null;

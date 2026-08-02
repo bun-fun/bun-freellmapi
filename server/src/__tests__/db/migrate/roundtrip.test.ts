@@ -8,6 +8,20 @@ const LEGACY_BASELINE_FILENAME = '20260101_000000_legacy_baseline.ts';
 const CUSTOM_PROVIDER_MODALITIES_FILENAME = '20260627_000001_custom_provider_modalities.ts';
 const CATALOG_MODEL_STATE_FILENAME = '20260627_000002_catalog_model_state.ts';
 const REQUEST_AGGREGATES_FILENAME = '20260628_120000_request_aggregates.ts';
+const GITHUB_GPT41_CONTEXT_FILENAME = '20260630_000001_github_gpt41_context.ts';
+const REQUEST_CLIENT_INFO_FILENAME = '20260706_000001_request_client_info.ts';
+const CUSTOM_MODEL_TOOL_SUPPORT_FILENAME = '20260706_000002_custom_model_tool_support.ts';
+const PROFILE_CHAIN_BACKFILL_FILENAME = '20260714_000001_profile_chain_backfill.ts';
+const KEY_HEALTH_ERROR_FILENAME = '20260720_000001_key_health_error.ts';
+const COOLDOWN_PROBE_PROVENANCE_FILENAME = '20260726_000001_cooldown_probe_provenance.ts';
+const REQUEST_ATTEMPTS_FILENAME = '20260726_000002_request_attempts.ts';
+const MODEL_SOURCE_PROVENANCE_FILENAME = '20260726_000003_model_source_provenance.ts';
+const MEDIA_MODEL_META_FILENAME = '20260726_000004_media_model_meta.ts';
+const REQUEST_SERVED_MODEL_FILENAME = '20260726_000005_request_served_model.ts';
+const ATTEMPT_ERROR_SUMMARY_FILENAME = '20260726_000006_attempt_error_summary.ts';
+const AGENT_COMPATIBILITY_FILENAME = '20260727_000001_agent_compatibility.ts';
+const TOMBSTONE_PROVENANCE_FILENAME = '20260728_000001_tombstone_provenance.ts';
+const CUSTOM_MODEL_ENDPOINT_IDENTITY_FILENAME = '20260729_000001_custom_model_endpoint_identity.ts';
 
 interface SchemaRow {
   type: string;
@@ -62,6 +76,20 @@ describe('migration round trip', () => {
         CUSTOM_PROVIDER_MODALITIES_FILENAME,
         CATALOG_MODEL_STATE_FILENAME,
         REQUEST_AGGREGATES_FILENAME,
+        GITHUB_GPT41_CONTEXT_FILENAME,
+        REQUEST_CLIENT_INFO_FILENAME,
+        CUSTOM_MODEL_TOOL_SUPPORT_FILENAME,
+        PROFILE_CHAIN_BACKFILL_FILENAME,
+        KEY_HEALTH_ERROR_FILENAME,
+        COOLDOWN_PROBE_PROVENANCE_FILENAME,
+        REQUEST_ATTEMPTS_FILENAME,
+        MODEL_SOURCE_PROVENANCE_FILENAME,
+        MEDIA_MODEL_META_FILENAME,
+        REQUEST_SERVED_MODEL_FILENAME,
+        ATTEMPT_ERROR_SUMMARY_FILENAME,
+        AGENT_COMPATIBILITY_FILENAME,
+        TOMBSTONE_PROVENANCE_FILENAME,
+        CUSTOM_MODEL_ENDPOINT_IDENTITY_FILENAME,
       ]);
     } finally {
       db.close();
@@ -74,6 +102,15 @@ describe('migration round trip', () => {
     try {
       await runMigrations(db, 'up');
       expect(getPendingMigrationNames(db)).toEqual([]);
+
+      // The catalog seed has no custom models, so the custom-model tool-support
+      // backfill only alters state once a user endpoint exists. Seed one (in its
+      // post-migration state, tools = 1) so the round trip actually exercises
+      // that migration's down (tools -> 0) and up (tools -> 1).
+      db.prepare(`
+        INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, supports_tools, supports_vision, enabled, source)
+        VALUES ('custom', 'roundtrip-custom', 'Roundtrip Custom', 50, 50, 1, 0, 1, 'user')
+      `).run();
 
       const fullState = snapshotAppState(db);
       await runDownToBaseline(db);
