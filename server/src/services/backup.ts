@@ -1,50 +1,83 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
+import { repoExists, createRepo, uploadFile, deleteFiles, listFiles } from '@huggingface/hub';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.resolve(__dirname, '../../data/freeapi.db');
+const DB_PATH = process.env.FREEAPI_DB_PATH || path.resolve(__dirname, '../data/freeapi.db');
+const DB_FILENAME = path.basename(DB_PATH);
 
-const HF_TOKEN = process.env.HF_TOKEN;
-const HF_DATASET_ID = process.env.HF_DATASET_ID;
+const HF_TOKEN = process.env.HF_TOKEN || '';
+const HF_DATASET_ID = process.env.HF_DATASET_ID || '';
 const BACKUP_ENABLED = process.env.BACKUP_ENABLED === 'true';
 const BACKUP_INTERVAL_MS = Number(process.env.BACKUP_INTERVAL_MS ?? 86400000);
+const KEEP_BACKUPS = Number(process.env.KEEP_BACKUPS ?? 3);
 
 const BACKUP_PREFIX = 'backup_';
 const BACKUP_SUFFIX = '.db';
-
-interface HfFile {
-  path: string;
-  type: string;
-}
 
 function log(msg: string) {
   console.log(`[Backup] ${msg}`);
 }
 
-function getBackupFiles(files: HfFile[]): string[] {
-  return files
-    .filter(
-      (f) =>
-        f.type === 'file' &&
-        f.path.startsWith(BACKUP_PREFIX) &&
-        f.path.endsWith(BACKUP_SUFFIX)
-    )
-    .map((f) => f.path)
-    .sort();
+function parseBackupTimestamp(filename: string): number {
+  const m = filename.match(/backup_(\d{8})_(\d{6})\.db/);
+  if (!m) return 0;
+  return new Date(`${m[1].slice(0,4)}-${m[1].slice(4,6)}-${m[1].slice(6,8)}T${m[2].slice(0,2)}:${m[2].slice(2,4)}:${m[2].slice(4,6)}`).getTime();
 }
 
-function parseBackupTimestamp(filename: string): number {
-  const match = filename.match(/backup_(\d{8})_(\d{6})\.db/);
-  if (!match) return 0;
-  const [, date, time] = match;
-  return new Date(
-    `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}T${time.slice(
-      0,
-      2
-    )}:${time.slice(2, 4)}:${time.slice(4, 6)}`
-  ).getTime();
+function findActualDb(): string | null {
+  const candidates = [
+    DB_PATH,
+    `/app/server/data/${DB_FILENAME}`,
+    `/app/data/${DB_FILENAME}`,
+    `/app/server/dist/data/${DB_FILENAME}`,
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  for (const root of ['/app', '/app/server', process.cwd()]) {
+    try {
+      const walk = (dir: string): string | null => {
+        try {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory() && !entry.name.startsWith('.')) {
+              const found = walk(full);
+              if (found) return found;
+            } else if (entry.isFile() && entry.name === DB_FILENAME) {
+              return full;
+            }
+          }
+        } catch { }
+        return null;
+      };
+      const found = walk(root);
+      if (found) return found;
+    } catch { }
+  }
+  return null;
 }
+
+function createSnapshot(src: string, dst: string): boolean {
+  try {
+    execSync(`sqlite3 "${src}" ".backup ${dst}"`, { timeout: 30000, stdio: 'pipe' });
+    return true;
+  } catch {
+    log('sqlite3 CLI not available, using file copy');
+  }
+  try {
+    fs.copyFileSync(src, dst);
+    return true;
+  } catch (e) {
+    log(`File copy failed: ${e}`);
+    return false;
+  }
+}
+
+const creds = { accessToken: HF_TOKEN };
+const repo = { name: HF_DATASET_ID, type: 'dataset' as const };
 
 export async function restoreLatestBackup(dbPath?: string): Promise<boolean> {
   if (!BACKUP_ENABLED || !HF_TOKEN || !HF_DATASET_ID) {
@@ -56,23 +89,25 @@ export async function restoreLatestBackup(dbPath?: string): Promise<boolean> {
 
   try {
     log('Checking for remote backups...');
-    const listUrl = `https://huggingface.co/api/datasets/${HF_DATASET_ID}/tree/main`;
-    const listRes = await fetch(listUrl, {
-      headers: { Authorization: `Bearer ${HF_TOKEN}` },
-    });
-
-    if (!listRes.ok) {
-      if (listRes.status === 404) {
-        log('Dataset not found. Skipping restore.');
-        return false;
+    const exists = await repoExists({ repo, ...creds });
+    if (!exists) {
+      log('Dataset not found, will create on next backup.');
+      try {
+        await createRepo({ repo, ...creds });
+        log(`Dataset ${HF_DATASET_ID} created successfully.`);
+      } catch (e: any) {
+        log(`Failed to create dataset: ${e.message || e}`);
       }
-      throw new Error(
-        `Failed to list dataset files: ${listRes.status} ${listRes.statusText}`
-      );
+      return false;
     }
 
-    const files = (await listRes.json()) as HfFile[];
-    const backups = getBackupFiles(files);
+    const backups: string[] = [];
+    for await (const entry of listFiles({ repo, recursive: false, ...creds })) {
+      if (entry.path.startsWith(BACKUP_PREFIX) && entry.path.endsWith(BACKUP_SUFFIX)) {
+        backups.push(entry.path);
+      }
+    }
+    backups.sort();
 
     if (backups.length === 0) {
       log('No backups found in dataset.');
@@ -97,16 +132,11 @@ export async function restoreLatestBackup(dbPath?: string): Promise<boolean> {
       log(`Local DB backed up to ${localBackup}`);
     }
 
-    const downloadUrl = `https://huggingface.co/datasets/${HF_DATASET_ID}/resolve/main/${latest}`;
-    const downloadRes = await fetch(downloadUrl, {
+    const dlRes = await fetch(`https://huggingface.co/datasets/${HF_DATASET_ID}/resolve/main/${latest}`, {
       headers: { Authorization: `Bearer ${HF_TOKEN}` },
     });
-
-    if (!downloadRes.ok) {
-      throw new Error(`Failed to download backup: ${downloadRes.status}`);
-    }
-
-    const buffer = Buffer.from(await downloadRes.arrayBuffer());
+    if (!dlRes.ok) throw new Error(`download failed: ${dlRes.status}`);
+    const buffer = Buffer.from(await dlRes.arrayBuffer());
     fs.writeFileSync(targetPath, buffer);
     log(`Restored ${latest} to ${targetPath} (${buffer.length} bytes)`);
     return true;
@@ -122,57 +152,54 @@ export async function createBackup(): Promise<boolean> {
     return false;
   }
 
-  if (!fs.existsSync(DB_PATH)) {
-    log('Local DB not found, skipping backup.');
+  const actualDb = findActualDb();
+  if (!actualDb) {
+    log('Database file not found, skip backup');
     return false;
   }
 
+  // Ensure WAL is checkpointed so the main db file is complete
   try {
-    // Ensure WAL is checkpointed so the main db file is complete
     const { Database } = require('bun:sqlite');
-    const db = new Database(DB_PATH);
+    const db = new Database(actualDb);
     db.exec('PRAGMA wal_checkpoint(FULL)');
     db.close();
+  } catch {
+    // WAL checkpoint is best-effort; createSnapshot will handle consistency
+  }
 
-    const timestamp = new Date();
-    const dateStr = timestamp.toISOString().slice(0, 10).replace(/-/g, '');
-    const timeStr = timestamp.toTimeString().slice(0, 8).replace(/:/g, '');
+  const tmpPath = path.join(path.dirname(actualDb), `.tmp_backup_${Date.now()}.db`);
+
+  try {
+    if (!createSnapshot(actualDb, tmpPath)) return false;
+
+    const ts = new Date();
+    const dateStr = ts.toISOString().slice(0, 10).replace(/-/g, '');
+    const timeStr = ts.toTimeString().slice(0, 8).replace(/:/g, '');
     const filename = `${BACKUP_PREFIX}${dateStr}_${timeStr}${BACKUP_SUFFIX}`;
 
     log(`Creating backup: ${filename}`);
 
-    // Copy to temp file to avoid reading while db may be written
-    const tmpPath = path.join(
-      path.dirname(DB_PATH),
-      `.tmp_backup_${Date.now()}.db`
-    );
-    fs.copyFileSync(DB_PATH, tmpPath);
-
     const fileBuffer = fs.readFileSync(tmpPath);
+    const file = new File([fileBuffer], filename, { type: 'application/octet-stream' });
 
-    const uploadUrl = `https://huggingface.co/api/datasets/${HF_DATASET_ID}/upload/main/${filename}`;
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${HF_TOKEN}`,
-        'Content-Type': 'application/octet-stream',
-      },
-      body: fileBuffer,
-    });
-
-    // Clean up temp file
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-      // ignore
+    const maxRetries = 3;
+    let lastErr: Error | null = null;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (attempt > 1) {
+        log(`Retry ${attempt}/${maxRetries}...`);
+        await new Promise(r => setTimeout(r, 3000));
+      }
+      try {
+        await uploadFile({ repo, file, ...creds });
+        lastErr = null;
+        break;
+      } catch (e: any) {
+        lastErr = e;
+        log(`Attempt ${attempt}/${maxRetries}: ${e.message || e}`);
+      }
     }
-
-    if (!uploadRes.ok) {
-      const text = await uploadRes.text();
-      throw new Error(
-        `Upload failed: ${uploadRes.status} ${uploadRes.statusText} - ${text}`
-      );
-    }
+    if (lastErr) throw lastErr;
 
     log(`Uploaded ${filename} successfully.`);
     await cleanupOldBackups();
@@ -180,47 +207,37 @@ export async function createBackup(): Promise<boolean> {
   } catch (err) {
     console.error('[Backup] Backup creation failed:', err);
     return false;
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch { }
   }
 }
 
 async function cleanupOldBackups(): Promise<void> {
+  if (KEEP_BACKUPS <= 0) return;
+
   try {
-    const listUrl = `https://huggingface.co/api/datasets/${HF_DATASET_ID}/tree/main`;
-    const listRes = await fetch(listUrl, {
-      headers: { Authorization: `Bearer ${HF_TOKEN}` },
-    });
-
-    if (!listRes.ok) return;
-
-    const files = (await listRes.json()) as HfFile[];
-    const backups = getBackupFiles(files);
-
-    if (backups.length <= 3) return;
+    const backups: string[] = [];
+    for await (const entry of listFiles({ repo, recursive: false, ...creds })) {
+      if (entry.path.startsWith(BACKUP_PREFIX) && entry.path.endsWith(BACKUP_SUFFIX)) {
+        backups.push(entry.path);
+      }
+    }
 
     const sorted = backups
-      .map((f) => ({ path: f, ts: parseBackupTimestamp(f) }))
+      .map(f => ({ name: f, ts: parseBackupTimestamp(f) }))
+      .filter(f => f.ts > 0)
       .sort((a, b) => a.ts - b.ts);
 
-    const toDelete = sorted.slice(0, sorted.length - 3).map((x) => x.path);
+    if (sorted.length <= KEEP_BACKUPS) return;
 
-    const commitUrl = `https://huggingface.co/api/datasets/${HF_DATASET_ID}/commit/main`;
-    const commitRes = await fetch(commitUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${HF_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        summary: 'Cleanup old backups (keep last 3)',
-        deletedFiles: toDelete,
-      }),
-    });
-
-    if (commitRes.ok) {
-      log(`Deleted ${toDelete.length} old backups: ${toDelete.join(', ')}`);
-    } else {
-      const text = await commitRes.text();
-      log(`Failed to delete old backups: ${commitRes.status} ${text}`);
+    const toDelete = sorted.slice(0, sorted.length - KEEP_BACKUPS).map(f => f.name);
+    try {
+      await deleteFiles({ repo, paths: toDelete, ...creds });
+      for (const name of toDelete) {
+        log(`Cleaned up old backup: ${name}`);
+      }
+    } catch (e: any) {
+      log(`Cleanup failed: ${e.message || e}`);
     }
   } catch (err) {
     console.error('[Backup] Cleanup failed:', err);
@@ -232,10 +249,7 @@ export function startBackupScheduler(): void {
     log('Backup scheduler disabled.');
     return;
   }
-
-  log(`Backup scheduler started (interval: ${BACKUP_INTERVAL_MS}ms)`);
-
-  // Run first backup after interval, then recurring
+  log(`Backup scheduler started (interval: ${BACKUP_INTERVAL_MS / 1000}s)`);
   setTimeout(() => {
     createBackup().catch(console.error);
     setInterval(() => createBackup().catch(console.error), BACKUP_INTERVAL_MS);

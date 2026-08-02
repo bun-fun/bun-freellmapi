@@ -11,7 +11,7 @@ import {
 } from '../services/modelsDev.js';
 
 const { Database } = (global as any).bun?.sqlite || require('bun:sqlite');
-type DatabaseType = InstanceType<typeof Database>;
+export type DatabaseType = InstanceType<typeof Database>;
 
 const __filename = typeof import.meta.url === 'string' ? fileURLToPath(import.meta.url) : import.meta.url;
 const __dirname = path.dirname(__filename);
@@ -49,6 +49,7 @@ export async function initDb(dbPath?: string): Promise<DatabaseType> {
   db.exec('PRAGMA foreign_keys = ON');
 
   createTables(db);
+  ensureSchemaCompat(db);
   initEncryptionKey(db);
 
   const hasModels = db.prepare('SELECT COUNT(*) as cnt FROM models').get() as { cnt: number };
@@ -84,6 +85,9 @@ function createTables(db: DatabaseType) {
       monthly_token_budget TEXT NOT NULL DEFAULT '',
       context_window INTEGER,
       enabled INTEGER NOT NULL DEFAULT 1,
+      supports_vision INTEGER NOT NULL DEFAULT 0,
+      supports_tools INTEGER NOT NULL DEFAULT 0,
+      key_id INTEGER,
       UNIQUE(platform, model_id)
     );
 
@@ -97,13 +101,18 @@ function createTables(db: DatabaseType) {
       status TEXT NOT NULL DEFAULT 'unknown',
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_checked_at TEXT
+      last_checked_at TEXT,
+      base_url TEXT
     );
 
     CREATE TABLE IF NOT EXISTS requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       platform TEXT NOT NULL,
       model_id TEXT NOT NULL,
+      key_id INTEGER,
+      requested_model TEXT,
+      ttfb_ms INTEGER,
+      request_type TEXT NOT NULL DEFAULT 'chat',
       status TEXT NOT NULL,
       input_tokens INTEGER NOT NULL DEFAULT 0,
       output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -112,12 +121,54 @@ function createTables(db: DatabaseType) {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS rate_limit_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      key_id INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('request', 'tokens')),
+      tokens INTEGER NOT NULL DEFAULT 0,
+      created_at_ms INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS rate_limit_cooldowns (
+      platform TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      key_id INTEGER NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (platform, model_id, key_id)
+    );
+
     CREATE TABLE IF NOT EXISTS fallback_config (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       model_db_id INTEGER NOT NULL REFERENCES models(id),
       priority INTEGER NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       UNIQUE(model_db_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      emoji TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT '#6366f1',
+      type TEXT NOT NULL DEFAULT 'custom',
+      is_favorite INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      auto_sort TEXT,
+      layout_config TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS profile_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      model_db_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+      priority INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      UNIQUE(profile_id, model_db_id)
     );
 
     CREATE TABLE IF NOT EXISTS settings (
@@ -141,11 +192,119 @@ function createTables(db: DatabaseType) {
       expires_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS provider_quota_state (
+      platform TEXT NOT NULL,
+      key_id INTEGER NOT NULL,
+      quota_pool_key TEXT NOT NULL,
+      metric TEXT NOT NULL,
+      limit_value INTEGER,
+      remaining_value INTEGER,
+      reset_at TEXT,
+      reset_strategy TEXT NOT NULL DEFAULT 'unknown',
+      source TEXT NOT NULL DEFAULT 'probe',
+      confidence REAL NOT NULL DEFAULT 0,
+      notes TEXT,
+      observed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (platform, key_id, quota_pool_key, metric)
+    );
+
+    CREATE TABLE IF NOT EXISTS provider_quota_observations (
+      id TEXT PRIMARY KEY,
+      platform TEXT NOT NULL,
+      key_id INTEGER NOT NULL,
+      provider_account_id TEXT,
+      model_id TEXT,
+      quota_pool_key TEXT NOT NULL,
+      metric TEXT NOT NULL,
+      status_code INTEGER,
+      limit_value INTEGER,
+      remaining_value INTEGER,
+      reset_at TEXT,
+      retry_after_ms INTEGER,
+      reset_strategy TEXT NOT NULL DEFAULT 'unknown',
+      source TEXT NOT NULL DEFAULT 'probe',
+      confidence REAL NOT NULL DEFAULT 0,
+      headers_json TEXT,
+      notes TEXT,
+      raw_json TEXT,
+      endpoint TEXT,
+      observed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS embedding_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      dimensions INTEGER NOT NULL,
+      max_input INTEGER,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      UNIQUE(platform, model_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS media_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      media_type TEXT NOT NULL DEFAULT 'image',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      UNIQUE(platform, model_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS quirks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      quirk_type TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      priority INTEGER NOT NULL DEFAULT 0,
+      config_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(provider, model_id, quirk_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS quirk_targets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      quirk_id INTEGER NOT NULL REFERENCES quirks(id) ON DELETE CASCADE,
+      target_type TEXT NOT NULL,
+      target_value TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1
+    );
+
     CREATE INDEX IF NOT EXISTS idx_requests_created_at ON requests(created_at);
     CREATE INDEX IF NOT EXISTS idx_requests_platform ON requests(platform);
     CREATE INDEX IF NOT EXISTS idx_api_keys_platform ON api_keys(platform);
     CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+    CREATE INDEX IF NOT EXISTS idx_rate_limit_usage_lookup ON rate_limit_usage(platform, model_id, key_id, kind, created_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_rate_limit_cooldowns_expires ON rate_limit_cooldowns(expires_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_provider_quota_state_platform ON provider_quota_state(platform, key_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_provider_quota_state_reset_at ON provider_quota_state(reset_at);
   `);
+}
+
+function ensureSchemaCompat(db: DatabaseType) {
+  ensureCol(db, 'models', 'supports_vision', 'INTEGER NOT NULL DEFAULT 0');
+  ensureCol(db, 'models', 'supports_tools', 'INTEGER NOT NULL DEFAULT 0');
+  ensureCol(db, 'models', 'key_id', 'INTEGER');
+  ensureCol(db, 'requests', 'key_id', 'INTEGER');
+  ensureCol(db, 'requests', 'requested_model', 'TEXT');
+  ensureCol(db, 'requests', 'ttfb_ms', 'INTEGER');
+  ensureCol(db, 'requests', 'request_type', "TEXT NOT NULL DEFAULT 'chat'");
+  ensureCol(db, 'api_keys', 'base_url', 'TEXT');
+  ensureCol(db, 'provider_quota_observations', 'retry_after_ms', 'INTEGER');
+  ensureCol(db, 'provider_quota_observations', 'raw_json', 'TEXT');
+  ensureCol(db, 'provider_quota_observations', 'endpoint', 'TEXT');
+  ensureCol(db, 'provider_quota_observations', 'created_at', "TEXT NOT NULL DEFAULT (datetime('now'))");
+}
+
+function ensureCol(db: DatabaseType, table: string, col: string, defn: string) {
+  const existing = db.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[];
+  if (!existing.some(c => c.name === col)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${defn}`);
+  }
 }
 
 async function seedModelsFromModelsDev(db: DatabaseType) {
@@ -299,4 +458,33 @@ export function regenerateUnifiedKey(): string {
   const key = `freellmapi-${crypto.randomBytes(24).toString('hex')}`;
   db.prepare("UPDATE settings SET value = ? WHERE key = 'unified_api_key'").run(key);
   return key;
+}
+
+export function getDefaultDbPath(): string {
+  return process.env.FREEAPI_DB_PATH?.trim() || DB_PATH;
+}
+
+export function getSetting(key: string): string | undefined {
+  const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value;
+}
+
+export function setSetting(key: string, value: string): void {
+  getDb().prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+}
+
+export function connectDb(dbPath?: string, opts?: { ensureDir?: boolean }): DatabaseType {
+  const resolvedPath = dbPath ?? getDefaultDbPath();
+  const isMemory = resolvedPath === ':memory:';
+  const ensureDir = opts?.ensureDir ?? true;
+  if (!isMemory && ensureDir) {
+    const dataDir = path.dirname(resolvedPath);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+  }
+  const d = new Database(resolvedPath);
+  if (!isMemory) d.exec('PRAGMA journal_mode = WAL');
+  d.exec('PRAGMA foreign_keys = ON');
+  return d;
 }

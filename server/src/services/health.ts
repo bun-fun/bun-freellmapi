@@ -1,7 +1,9 @@
 import { getDb } from '../db/index.js';
-import { getProvider } from '../providers/index.js';
+import { resolveProvider } from '../providers/index.js';
 import { decrypt } from '../lib/crypto.js';
 import type { Platform, KeyStatus } from '@freellmapi/shared/types.js';
+import { inferQuotaPoolKey } from './provider-quota.js';
+import type { Scheduler } from '../lib/scheduler.js';
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const CONSECUTIVE_FAILURES_TO_DISABLE = 3;
@@ -14,12 +16,18 @@ export async function checkKeyHealth(keyId: number): Promise<KeyStatus> {
   const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(keyId) as any;
   if (!row) return 'error';
 
-  const provider = getProvider(row.platform as Platform);
+  const provider = resolveProvider(row.platform as Platform, row.base_url);
   if (!provider) return 'error';
 
   try {
     const apiKey = decrypt(row.encrypted_key, row.iv, row.auth_tag);
-    const isValid = await provider.validateKey(apiKey);
+    const isValid = await provider.validateKey(apiKey, {
+      platform: row.platform as Platform,
+      keyId,
+      quotaPoolKey: inferQuotaPoolKey(row.platform as Platform, null),
+      endpoint: 'models',
+      origin: 'health',
+    });
 
     const status: KeyStatus = isValid ? 'healthy' : 'invalid';
 
@@ -43,7 +51,15 @@ export async function checkKeyHealth(keyId: number): Promise<KeyStatus> {
     // Transport errors (DNS/timeout/TLS) — provider unreachable, not necessarily
     // a bad key. Mark status='error' but do NOT increment failure counter — auto-
     // disable is reserved for confirmed 401/403 (returned by validateKey as false).
-    console.error(`[Health] Key ${keyId} transport error:`, err.message);
+    // Include platform + base_url so a flapping CloudFront edge or DNS failure is
+    // attributable to the responsible provider in one log read. The leading
+    // "[Health] Key N (" prefix is preserved so the 12-hourly crash watchdog
+    // (cron bff5ae167d28) that scrapes /tmp/freellmapi.log for these lines
+    // continues to match unchanged.
+    console.error(
+      `[Health] Key ${keyId} (${row.platform}, base=${row.base_url ?? 'default'}) ` +
+      `transport error: ${err.message}`,
+    );
     db.prepare("UPDATE api_keys SET status = ?, last_checked_at = datetime('now') WHERE id = ?")
       .run('error', keyId);
     return 'error';
@@ -63,19 +79,19 @@ export async function checkAllKeys(): Promise<void> {
   console.log(`[Health] Check complete.`);
 }
 
-let intervalId: ReturnType<typeof setInterval> | null = null;
+let cancelHealthCheck: (() => void) | null = null;
 
-export function startHealthChecker(): void {
-  if (intervalId) return;
+export function startHealthChecker(scheduler: Scheduler): void {
+  if (cancelHealthCheck) return;
   console.log(`[Health] Starting health checker (every ${CHECK_INTERVAL_MS / 1000}s)`);
-  intervalId = setInterval(() => {
-    checkAllKeys().catch(err => console.error('[Health] Check failed:', err));
-  }, CHECK_INTERVAL_MS);
+  cancelHealthCheck = scheduler.every(CHECK_INTERVAL_MS, () =>
+    checkAllKeys().catch(err => console.error('[Health] Check failed:', err)),
+  );
 }
 
 export function stopHealthChecker(): void {
-  if (intervalId) {
-    clearInterval(intervalId);
-    intervalId = null;
+  if (cancelHealthCheck) {
+    cancelHealthCheck();
+    cancelHealthCheck = null;
   }
 }

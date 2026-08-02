@@ -16,8 +16,14 @@ data/
 # Personal deployment scripts (contain keys/credentials — kept local)
 deploy-pi.sh
 update-hermes.sh
+<<<<<<< HEAD
 bun.lock
 
 .arts/
 .catpaw/
 .codeartsdoer/
+=======
+
+# Monetization planning — private, never committed
+monetization/
+>>>>>>> main
