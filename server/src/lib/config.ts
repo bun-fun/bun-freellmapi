@@ -13,10 +13,8 @@ export interface Config {
   host: string;
   dbPath: string | null;
   dashboardOrigins: string[];
-  clientDist: string | null;
   proxyRateLimitRpm: number;
   nodeEnv: string;
-  serveStaticAssets: boolean;
 }
 
 export function loadConfig(): Config {
@@ -31,9 +29,7 @@ export function loadConfig(): Config {
       .split(',')
       .map(s => s.trim())
       .filter(Boolean),
-    clientDist: process.env.CLIENT_DIST ?? null,
     proxyRateLimitRpm: parseRateLimitRpm(),
     nodeEnv: process.env.NODE_ENV ?? 'development',
-    serveStaticAssets: true,
   };
 }

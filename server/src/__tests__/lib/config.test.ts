@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { loadConfig } from '../../lib/config.js';
 
-const ENV_KEYS = ['PORT', 'HOST', 'FREEAPI_DB_PATH', 'DASHBOARD_ORIGINS', 'CLIENT_DIST', 'PROXY_RATE_LIMIT_RPM', 'NODE_ENV'];
+const ENV_KEYS = ['PORT', 'HOST', 'FREEAPI_DB_PATH', 'DASHBOARD_ORIGINS', 'PROXY_RATE_LIMIT_RPM', 'NODE_ENV'];
 
 afterEach(() => {
   ENV_KEYS.forEach(k => delete process.env[k]);
@@ -14,9 +14,7 @@ describe('loadConfig', () => {
     expect(cfg.host).toBe('::');
     expect(cfg.dbPath).toBeNull();
     expect(cfg.dashboardOrigins).toEqual([]);
-    expect(cfg.clientDist).toBeNull();
     expect(cfg.proxyRateLimitRpm).toBe(120);
-    expect(cfg.serveStaticAssets).toBe(true);
   });
 
   it('reads PORT and HOST from env', () => {
@@ -31,12 +29,6 @@ describe('loadConfig', () => {
     process.env.DASHBOARD_ORIGINS = 'http://localhost:3000, http://example.com , ';
     const cfg = loadConfig();
     expect(cfg.dashboardOrigins).toEqual(['http://localhost:3000', 'http://example.com']);
-  });
-
-  it('reads CLIENT_DIST from env', () => {
-    process.env.CLIENT_DIST = '/opt/client/dist';
-    const cfg = loadConfig();
-    expect(cfg.clientDist).toBe('/opt/client/dist');
   });
 
   it('reads FREEAPI_DB_PATH from env', () => {
