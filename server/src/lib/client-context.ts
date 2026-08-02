@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from 'async_hooks';
-import type { NextFunction, Request, Response } from 'express';
 import { classifyClientAgent, type ClientAgent } from './client-classifier.js';
 
 export interface ClientContext {
@@ -8,46 +7,29 @@ export interface ClientContext {
   agent: ClientAgent | null;
 }
 
-// Request-scoped caller identity, readable from anywhere below the middleware
-// without threading parameters through every logRequest() call site (the chat
-// proxy, responses, anthropic, fusion, embeddings and media paths all log).
 const storage = new AsyncLocalStorage<ClientContext>();
 
-// Resolve the client IP from the socket peer address. The X-Forwarded-For
-// header is only trusted when Express's "trust proxy" setting is enabled
-// (opt-in via app.set('trust proxy', ...) or the TRUST_PROXY env var in
-// run.ts). Without that, a spoofed header from a LAN client is ignored.
-function resolveClientIp(req: Request): string | null {
-  const trustProxy = req.app?.get('trust proxy') ?? false;
-  let raw: string | null;
-  if (trustProxy) {
-    const xff = req.headers['x-forwarded-for'];
-    raw = (Array.isArray(xff) ? xff[0] : xff)?.split(',')[0]?.trim() || req.socket.remoteAddress || null;
-  } else {
-    raw = req.socket.remoteAddress || null;
-  }
-  // Normalize IPv4-mapped IPv6 ("::ffff:192.168.0.5" -> "192.168.0.5").
-  return raw?.replace(/^::ffff:/i, '') ?? null;
-}
-
-// Privacy opt-out: REQUEST_ANALYTICS_LOG_CLIENT=false stores nulls instead of
-// the caller's IP/UA. Read per request (not at module load) so tests and
-// embedders can toggle it without re-importing.
 function clientLoggingEnabled(): boolean {
   return process.env.REQUEST_ANALYTICS_LOG_CLIENT !== 'false';
 }
 
-export function clientContextMiddleware(req: Request, _res: Response, next: NextFunction): void {
+/**
+ * Run a callback with a client context derived from the request.
+ * Bun-native replacement for the Express clientContextMiddleware.
+ */
+export function runWithClientContext<T>(req: Request, fn: () => T): T {
   if (!clientLoggingEnabled()) {
-    storage.run({ ip: null, userAgent: null, agent: null }, next);
-    return;
+    return storage.run({ ip: null, userAgent: null, agent: null }, fn);
   }
-  const ua = req.headers['user-agent'];
-  storage.run({
-    ip: resolveClientIp(req),
-    userAgent: typeof ua === 'string' ? ua.slice(0, 256) : null,
+  const ua = req.headers.get('user-agent');
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    ?? req.headers.get('x-real-ip')
+    ?? null;
+  return storage.run({
+    ip: ip?.replace(/^::ffff:/i, '') ?? null,
+    userAgent: ua ? ua.slice(0, 256) : null,
     agent: classifyClientAgent(req),
-  }, next);
+  }, fn);
 }
 
 export function getClientContext(): ClientContext {

@@ -1,5 +1,3 @@
-import type { Request } from 'express';
-
 export const CLIENT_AGENTS = [
   'claude-code',
   'codex',
@@ -25,27 +23,20 @@ export const CLIENT_AGENTS = [
 export type ClientAgent = (typeof CLIENT_AGENTS)[number];
 
 function header(req: Request, name: string): string {
-  const raw = req.headers[name];
-  return (Array.isArray(raw) ? raw[0] : raw)?.toLowerCase() ?? '';
+  return req.headers.get(name)?.toLowerCase() ?? '';
 }
 
 /**
  * Best-effort classifier from stable protocol/header signals first, then UA.
- * It intentionally returns a coarse enum: analytics should remain useful when
- * a client revs its version string or wraps an underlying SDK.
+ * Adapted for Bun's native Request (Web API) instead of Express Request.
  */
 export function classifyClientAgent(req: Request): ClientAgent {
-  const path = (req.originalUrl ?? req.url ?? '').split('?')[0].toLowerCase();
+  const url = new URL(req.url);
+  const path = url.pathname.toLowerCase();
   const tokenizedPath = path.replace(/^\/v1\/t\/[^/]+/, '');
   const ua = header(req, 'user-agent');
 
-  // Strongest signal first: the dedicated session header only Claude Code sets.
   if (header(req, 'x-claude-code-session-id')) return 'claude-code';
-
-  // UA signals must beat wire-format fallbacks: Qwen Code speaks the Gemini
-  // wire on /v1beta, and a plain openai SDK can call /v1/responses — neither
-  // should be counted as the surface's flagship client. Claude Code's real UA
-  // is `claude-cli/x.y.z (external, cli)`.
   if (/claude[- ]?code|\bclaude-cli\b/.test(ua)) return 'claude-code';
   if (/\bcodex\b/.test(ua)) return 'codex';
   if (/qwen[- ]?code|\bqwen-cli\b/.test(ua)) return 'qwen-code';
@@ -65,12 +56,9 @@ export function classifyClientAgent(req: Request): ClientAgent {
   if (/anthropic|claude-sdk/.test(ua)) return 'anthropic-sdk';
   if (/openai|langchain|litellm/.test(ua)) return 'openai-sdk';
 
-  // Wire-format fallbacks for clients with no recognizable UA.
   if (path.startsWith('/v1/responses') || tokenizedPath.startsWith('/responses')) return 'codex';
   if (path.startsWith('/v1beta/')) return 'gemini-cli';
   if (path.startsWith('/v1/messages')) {
-    // anthropic.ts session affinity treats x-session-id as a Claude Code
-    // signal on this surface; anything else Anthropic-shaped stays coarse.
     return header(req, 'x-session-id') ? 'claude-code' : 'anthropic-sdk';
   }
   if (tokenizedPath.startsWith('/api/chat')
