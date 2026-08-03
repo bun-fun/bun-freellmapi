@@ -1,13 +1,10 @@
+.github/
 node_modules/
 dist/
 server/data/
-<<<<<<< HEAD
-data/
-=======
 # Runtime data dir when the server is launched from the repo root (same
 # contents as server/data — DB + keyfile — so same rule).
 /data/
->>>>>>> stxh/main
 *.db
 *.db-wal
 *.db-shm
