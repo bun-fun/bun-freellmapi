@@ -2,7 +2,7 @@
 
 > **Live demo:** [bun008-freellmapi.hf.space](https://bun008-freellmapi.hf.space)
 
-An OpenAI-compatible proxy aggregating **free-tier LLM models** from multiple providers behind a single endpoint. This is a **Bun-native** fork of the original [FreeLLMAPI](https://github.com/anomalyco/freellmapi) project.
+An OpenAI-compatible proxy aggregating **free-tier LLM models** from multiple providers behind a single endpoint. This is a **Bun-native** fork of the original [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) project.
 
 ## Relationship to the Original
 
