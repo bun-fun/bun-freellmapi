@@ -12,6 +12,7 @@ import { settingsRoute } from './routes/bun/settings.js';
 import { proxyRoute } from './routes/bun/proxy.js';
 import { authRoute } from './routes/bun/auth.js';
 import { platformsRoute } from './routes/bun/platforms.js';
+import { premiumRoute } from './routes/bun/premium.js';
 import { authenticateRequest } from './lib/auth.js';
 import { serveStatic } from './lib/static.js';
 import path from 'path';
@@ -104,6 +105,11 @@ async function start() {
 
     if (pathname === '/api/platforms') {
       const res = await platformsRoute(req, url);
+      return addCors(req, res);
+    }
+
+    if (pathname.startsWith('/api/premium')) {
+      const res = await premiumRoute(req, url);
       return addCors(req, res);
     }
 

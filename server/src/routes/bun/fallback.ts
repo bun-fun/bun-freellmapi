@@ -162,5 +162,40 @@ export async function fallbackRoute(req: Request, url: URL): Promise<Response> {
     });
   }
 
+  // Penalty inspector — returns current dynamic penalties for the dashboard
+  if (path === '/api/fallback/penalty-inspector' && req.method === 'GET') {
+    const penalties = getAllPenalties();
+    return jsonResponse({
+      penalties: penalties.map(p => ({
+        modelDbId: p.modelDbId,
+        penalty: p.penalty,
+        count: p.count,
+        expiresAt: (p as any).expiresAt ?? null,
+      })),
+    });
+  }
+
+  // Routing config — get/put routing strategy settings
+  if (path === '/api/fallback/routing' && req.method === 'GET') {
+    const db = getDb();
+    const strategy = db.prepare("SELECT value FROM settings WHERE key = 'routing_strategy'").get() as { value: string } | undefined;
+    return jsonResponse({
+      strategy: strategy?.value ?? 'auto',
+      settings: {},
+    });
+  }
+
+  if (path === '/api/fallback/routing' && req.method === 'PUT') {
+    try {
+      const body = await req.json() as { strategy?: string };
+      const db = getDb();
+      const strategy = body.strategy ?? 'auto';
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('routing_strategy', ?)").run(strategy);
+      return jsonResponse({ success: true });
+    } catch (err: any) {
+      return jsonResponse({ error: { message: err.message } }, 400);
+    }
+  }
+
   return new Response('Not Found', { status: 404 });
 }
