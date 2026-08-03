@@ -326,7 +326,7 @@ function ensureSchemaCompat(db: DatabaseType) {
   // Migration: custom_model_endpoint_identity — endpoint_scope + UNIQUE change
   ensureCol(db, 'models', 'endpoint_scope', "TEXT NOT NULL DEFAULT ''");
   ensureCol(db, 'models', 'paid_input_per_m', 'REAL');
-  ensureCol(db, 'paid_output_per_m', 'REAL');
+  ensureCol(db, 'models', 'paid_output_per_m', 'REAL');
   ensureModelsEndpointScopeUnique(db);
 
   // Migration: tombstone_provenance
