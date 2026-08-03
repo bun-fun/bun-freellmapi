@@ -323,6 +323,9 @@ function ensureSchemaCompat(db: DatabaseType) {
   // Migration: agent_compatibility
   ensureCol(db, 'requests', 'client_agent', 'TEXT');
 
+  // Create tables added by migrations BEFORE adding columns to them
+  ensureMigrationTables(db);
+
   // Migration: custom_model_endpoint_identity — endpoint_scope + UNIQUE change
   ensureCol(db, 'models', 'endpoint_scope', "TEXT NOT NULL DEFAULT ''");
   ensureCol(db, 'models', 'paid_input_per_m', 'REAL');
@@ -335,9 +338,6 @@ function ensureSchemaCompat(db: DatabaseType) {
 
   // Migration: attempt_error_summary
   ensureCol(db, 'request_attempts', 'error_summary', 'TEXT');
-
-  // Create tables added by migrations (idempotent)
-  ensureMigrationTables(db);
 }
 
 function ensureMigrationTables(db: DatabaseType) {
