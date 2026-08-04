@@ -10,11 +10,29 @@ import { analyticsRoute } from './routes/bun/analytics.js';
 import { healthRoute } from './routes/bun/health.js';
 import { settingsRoute } from './routes/bun/settings.js';
 import { proxyRoute } from './routes/bun/proxy.js';
+import { responsesRoute } from './routes/bun/responses.js';
+import { anthropicRoute, anthropicCountTokensRoute } from './routes/bun/anthropic.js';
+import { embeddingsRoute } from './routes/bun/embeddings.js';
 import { authRoute } from './routes/bun/auth.js';
 import { platformsRoute } from './routes/bun/platforms.js';
 import { premiumRoute } from './routes/bun/premium.js';
 import { authenticateRequest } from './lib/auth.js';
 import { serveStatic } from './lib/static.js';
+import { livezRoute, readyzRoute, providersRoute } from './routes/bun/status.js';
+import { imagesRoute, speechRoute, transcriptionRoute } from './routes/bun/media-proxy.js';
+import { completionsRoute } from './routes/bun/completions.js';
+import { openapiRoute, docsRoute } from './routes/bun/docs.js';
+import { geminiModelsRoute, geminiModelRoute, geminiGenerateRoute, geminiCountTokensRoute } from './routes/bun/gemini.js';
+import {
+  ollamaTagsRoute, ollamaVersionRoute, ollamaShowRoute,
+  ollamaChatRoute, ollamaGenerateRoute, ollamaEmbedRoute,
+  getOllamaEmulationMode,
+} from './routes/bun/ollama.js';
+import { urlTokenRoute } from './routes/bun/url-tokens.js';
+import {
+  mediaListRoute, mediaUsageRoute, mediaCustomRoute,
+  mediaUpdateRoute, mediaDeleteRoute,
+} from './routes/bun/media-dashboard.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -58,6 +76,36 @@ async function start() {
           'Access-Control-Allow-Credentials': 'true',
         }
       });
+    }
+
+    // Ollama emulation routes — own their exact /api/* paths with their own
+    // auth (open-loopback / key-required). Must come BEFORE the dashboard
+    // session gate because real Ollama clients don't use dashboard auth.
+    const OLLAMA_API_PATHS = new Set([
+      '/api/tags', '/api/version', '/api/show',
+      '/api/chat', '/api/generate',
+      '/api/embed', '/api/embeddings',
+    ]);
+    if (OLLAMA_API_PATHS.has(pathname) && getOllamaEmulationMode() !== 'off') {
+      let res: Response;
+      if (pathname === '/api/tags' && req.method === 'GET') res = ollamaTagsRoute(req);
+      else if (pathname === '/api/version' && req.method === 'GET') res = ollamaVersionRoute(req);
+      else if (pathname === '/api/show' && req.method === 'POST') res = await ollamaShowRoute(req);
+      else if (pathname === '/api/chat' && req.method === 'POST') res = await ollamaChatRoute(req);
+      else if (pathname === '/api/generate' && req.method === 'POST') res = await ollamaGenerateRoute(req);
+      else if (pathname === '/api/embed' && req.method === 'POST') res = await ollamaEmbedRoute(req, false);
+      else if (pathname === '/api/embeddings' && req.method === 'POST') res = await ollamaEmbedRoute(req, true);
+      else {
+        // Fall through to dashboard route for /api/embeddings if it's a valid session
+        if (pathname === '/api/embeddings') {
+          const auth = authenticateRequest(req);
+          if (!auth.ok) return addCors(req, auth.response);
+          const er = await embeddingsRoute(req, url);
+          return addCors(req, er);
+        }
+        res = new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: { 'Content-Type': 'application/json' } });
+      }
+      return addCors(req, res);
     }
 
     // Auth routes (no auth required)
@@ -113,9 +161,129 @@ async function start() {
       return addCors(req, res);
     }
 
-    // OpenAI-compatible proxy
+    // Media dashboard routes
+    if (pathname === '/api/media' && req.method === 'GET') {
+      return addCors(req, mediaListRoute());
+    }
+    if (pathname === '/api/media/usage' && req.method === 'GET') {
+      return addCors(req, mediaUsageRoute(req));
+    }
+    if (pathname === '/api/media/custom' && req.method === 'POST') {
+      const res = await mediaCustomRoute(req);
+      return addCors(req, res);
+    }
+    if (pathname.startsWith('/api/media/custom/') && req.method === 'DELETE') {
+      const id = pathname.split('/').pop()!;
+      return addCors(req, mediaDeleteRoute(id));
+    }
+    if (pathname.startsWith('/api/media/') && req.method === 'PUT') {
+      const id = pathname.split('/').pop()!;
+      const res = await mediaUpdateRoute(req, id);
+      return addCors(req, res);
+    }
+
+    // Liveness / readiness probes (unauthenticated)
+    if (pathname === '/livez') return addCors(req, livezRoute(req));
+    if (pathname === '/readyz') return addCors(req, readyzRoute(req));
+
+    // OpenAI-compatible Responses API (Codex)
+    if (pathname === '/v1/responses' && req.method === 'POST') {
+      const res = await responsesRoute(req, url);
+      return addCors(req, res);
+    }
+
+    // Anthropic-compatible Messages API (Claude Code)
+    if (pathname === '/v1/messages/count_tokens' && req.method === 'POST') {
+      const res = await anthropicCountTokensRoute(req, url);
+      return addCors(req, res);
+    }
+
+    if (pathname === '/v1/messages' && req.method === 'POST') {
+      const res = await anthropicRoute(req, url);
+      return addCors(req, res);
+    }
+
+    // OpenAI-compatible embeddings
+    if (pathname === '/v1/embeddings' && req.method === 'POST') {
+      const res = await embeddingsRoute(req, url);
+      return addCors(req, res);
+    }
+
+    // OpenAI-compatible image generation
+    if (pathname === '/v1/images/generations' && req.method === 'POST') {
+      const res = await imagesRoute(req);
+      return addCors(req, res);
+    }
+
+    // OpenAI-compatible text-to-speech
+    if (pathname === '/v1/audio/speech' && req.method === 'POST') {
+      const res = await speechRoute(req);
+      return addCors(req, res);
+    }
+
+    // OpenAI-compatible speech-to-text
+    if (pathname === '/v1/audio/transcriptions' && req.method === 'POST') {
+      const res = await transcriptionRoute(req);
+      return addCors(req, res);
+    }
+
+    // Legacy OpenAI completions
+    if (pathname === '/v1/completions' && req.method === 'POST') {
+      const res = await completionsRoute(req);
+      return addCors(req, res);
+    }
+
+    // Static API docs (no auth)
+    if (pathname === '/v1/docs' && req.method === 'GET') return addCors(req, docsRoute());
+    if (pathname === '/v1/openapi.json' && req.method === 'GET') return addCors(req, openapiRoute());
+
+    // Per-provider status (unified key auth)
+    if (pathname === '/v1/providers' && req.method === 'GET') {
+      return addCors(req, providersRoute(req));
+    }
+
+    // URL token routes — /v1/t/:token/...
+    if (pathname.startsWith('/v1/t/')) {
+      const parts = pathname.split('/');
+      const token = parts[3] ?? '';
+      const restPath = '/' + parts.slice(4).join('/');
+      const res = await urlTokenRoute(req, url, token, restPath);
+      return addCors(req, res);
+    }
+
+    // OpenAI-compatible proxy (models, chat/completions)
     if (pathname.startsWith('/v1')) {
       const res = await proxyRoute(req, url);
+      return addCors(req, res);
+    }
+
+    // Gemini native API (/v1beta/*)
+    if (pathname.startsWith('/v1beta')) {
+      let res: Response;
+      if (pathname === '/v1beta/models' && req.method === 'GET') {
+        res = geminiModelsRoute(req);
+      } else if (pathname.startsWith('/v1beta/models/') && req.method === 'GET') {
+        const modelId = decodeURIComponent(pathname.slice('/v1beta/models/'.length));
+        res = geminiModelRoute(req, modelId);
+      } else if (pathname.includes(':generateContent') && req.method === 'POST') {
+        const modelMatch = pathname.match(/\/v1beta\/models\/(.+):generateContent$/);
+        if (modelMatch) {
+          res = await geminiGenerateRoute(req, decodeURIComponent(modelMatch[1]).replace(/^models\//, ''), false);
+        } else {
+          res = new Response(JSON.stringify({ error: { code: 404, message: 'Not found', status: 'NOT_FOUND' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+        }
+      } else if (pathname.includes(':streamGenerateContent') && req.method === 'POST') {
+        const modelMatch = pathname.match(/\/v1beta\/models\/(.+):streamGenerateContent$/);
+        if (modelMatch) {
+          res = await geminiGenerateRoute(req, decodeURIComponent(modelMatch[1]).replace(/^models\//, ''), true);
+        } else {
+          res = new Response(JSON.stringify({ error: { code: 404, message: 'Not found', status: 'NOT_FOUND' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+        }
+      } else if (pathname.includes(':countTokens') && req.method === 'POST') {
+        res = await geminiCountTokensRoute(req);
+      } else {
+        res = new Response(JSON.stringify({ error: { code: 404, message: 'Not found', status: 'NOT_FOUND' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+      }
       return addCors(req, res);
     }
 

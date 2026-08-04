@@ -110,7 +110,7 @@ export default function ModelDetailPage() {
     mutationFn: (splits: UnifyOverrides['splits']) =>
       apiFetch('/api/settings/unify', {
         method: 'PUT',
-        body: JSON.stringify({ overrides: { merges: unify?.overrides.merges ?? [], splits } }),
+        body: JSON.stringify({ overrides: { merges: unify?.overrides?.merges ?? [], splits } }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['unify'] })
@@ -120,7 +120,7 @@ export default function ModelDetailPage() {
     },
   })
 
-  const splits = unify?.overrides.splits ?? []
+  const splits = unify?.overrides?.splits ?? []
   // New splits are written against ONE row: an unqualified "platform:modelId"
   // matches every relay that serves the id, so splitting one relay's card used
   // to move both (#651). Reading accepts the plain form too, so a split saved

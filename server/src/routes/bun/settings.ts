@@ -1,6 +1,13 @@
 import { getUnifiedApiKey, regenerateUnifiedKey, getDb } from '../../db/index.js';
 import { jsonResponse, errorResponse } from '../../lib/json.js';
 import { z } from 'zod';
+import {
+  isUnifyEnabled,
+  setUnifyEnabled,
+  getUnifyOverrides,
+  setUnifyOverrides,
+  unifyOverridesSchema,
+} from '../../services/model-groups.js';
 
 export async function settingsRoute(req: Request, _url: URL): Promise<Response> {
   const path = new URL(req.url).pathname;
@@ -61,18 +68,19 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
     }
   }
 
-  // Unify settings
+  // Unify settings — returns { enabled, overrides } and accepts partial updates.
+  // The overrides object (merges + splits) is what the frontend reads to show
+  // per-provider split/merge controls on the model detail page.
   if (path === '/api/settings/unify') {
-    const db = getDb();
     if (req.method === 'GET') {
-      const row = db.prepare("SELECT value FROM settings WHERE key = 'unify_enabled'").get() as { value: string } | undefined;
-      return jsonResponse({ enabled: row?.value === 'true' });
+      return jsonResponse({ enabled: isUnifyEnabled(), overrides: getUnifyOverrides() });
     }
     if (req.method === 'PUT') {
       try {
-        const body = await req.json() as { enabled: boolean };
-        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('unify_enabled', ?)").run(String(body.enabled));
-        return jsonResponse({ success: true });
+        const body = await req.json() as { enabled?: boolean; overrides?: unknown };
+        if (body.enabled !== undefined) setUnifyEnabled(body.enabled);
+        if (body.overrides !== undefined) setUnifyOverrides(body.overrides);
+        return jsonResponse({ enabled: isUnifyEnabled(), overrides: getUnifyOverrides() });
       } catch (err: any) {
         return jsonResponse({ error: { message: err.message } }, 400);
       }

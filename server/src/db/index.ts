@@ -9,6 +9,7 @@ import {
   mapToFreellmapi,
   computeRanks,
 } from '../services/modelsDev.js';
+import { seedCatalogModels } from '../services/catalog-seed.js';
 
 const { Database } = (global as any).bun?.sqlite || require('bun:sqlite');
 export type DatabaseType = InstanceType<typeof Database>;
@@ -59,6 +60,15 @@ export async function initDb(dbPath?: string): Promise<DatabaseType> {
     } catch (err) {
       console.error('[DB] Failed to seed models from models.dev:', err);
     }
+  }
+
+  // Seed catalog-managed platform models (agnes, reka, nara, bazaarlink, etc.)
+  // that are not in models.dev and would normally come from catalog-sync.
+  // Idempotent: only inserts rows for platforms with zero models.
+  try {
+    seedCatalogModels(db);
+  } catch (err) {
+    console.error('[DB] Failed to seed catalog models:', err);
   }
 
   ensureUnifiedKey(db);
