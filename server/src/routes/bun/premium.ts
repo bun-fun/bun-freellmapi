@@ -8,21 +8,42 @@ export async function premiumRoute(req: Request, url: URL): Promise<Response> {
 
   // GET /api/premium — premium status
   if (path === '/api/premium' && req.method === 'GET') {
+    const db = getDb();
+    const keyRow = db.prepare("SELECT value FROM settings WHERE key = 'premium_key'").get() as { value: string } | undefined;
+    const maskedKey = keyRow ? '••••••' + keyRow.value.slice(-4) : null;
+
     return jsonResponse({
-      isPremium: false,
-      features: [],
-      expiresAt: null,
+      hasKey: Boolean(keyRow),
+      maskedKey,
+      license: null,
+      catalog: {
+        baseUrl: '',
+        appliedVersion: null,
+        appliedTier: null,
+        lastSyncMs: null,
+        lastError: null,
+      },
+      siteUrl: '',
     });
   }
 
-  // POST/DELETE /api/premium/key — set/remove premium key (stub)
-  if (path === '/api/premium/key') {
-    return jsonResponse({ success: false, message: 'Premium not available in this build' });
+  // POST /api/premium/key — set premium key
+  if (path === '/api/premium/key' && req.method === 'POST') {
+    const body = await req.json().catch(() => ({})) as { key?: string };
+    if (!body.key) return jsonResponse({ success: false, message: 'Key required' }, 400);
+    getDb().prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('premium_key', ?)").run(body.key);
+    return jsonResponse({ success: true });
+  }
+
+  // DELETE /api/premium/key — remove premium key
+  if (path === '/api/premium/key' && req.method === 'DELETE') {
+    getDb().prepare("DELETE FROM settings WHERE key = 'premium_key'").run();
+    return jsonResponse({ success: true });
   }
 
   // POST /api/premium/sync — sync premium features (stub)
   if (path === '/api/premium/sync' && req.method === 'POST') {
-    return jsonResponse({ success: false, message: 'Premium not available in this build' });
+    return jsonResponse({ success: false, message: 'Premium sync not available in this build' });
   }
 
   // POST /api/premium/portal — billing portal URL (stub)

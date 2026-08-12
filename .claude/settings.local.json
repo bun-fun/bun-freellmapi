@@ -7,7 +7,28 @@
       "Bash(python3 -c \":*)",
       "Bash(git rm *)",
       "Bash(rm -rf client/.git)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(rtk ls *)",
+      "Bash(rtk read *)",
+      "Bash(rtk wc *)",
+      "Bash(rtk grep *)",
+      "Bash(rtk git *)",
+      "Bash(rtk npx *)",
+      "Bash(bunx vitest *)",
+      "Bash(bun test *)",
+      "Bash(rtk find *)",
+      "Bash(bun *)",
+      "Bash(bunx tsc *)",
+      "mcp__codebase-memory-mcp__search_graph",
+      "Bash(tasklist)",
+      "Bash(wmic datafile *)",
+      "Bash(powershell -Command \"Get-ChildItem -Path E:\\\\NewCode\\\\bun-freellmapi -Filter 'freeapi.db' -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'E:\\\\NewCode\\\\bun-freellmapi' -Filter 'freeapi.db' -Recurse -Depth 5 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")",
+      "Bash(powershell -Command \"Get-Process bun | Select-Object Id, Path | Format-Table\")",
+      "Bash(curl -s http://localhost:3001/api/health)",
+      "Bash(rtk curl *)",
+      "Bash(pkill -f 'server/dist/server')",
+      "Bash(powershell -Command \"Get-Process -Id \\(Get-NetTCPConnection -LocalPort 7860 -ErrorAction SilentlyContinue\\).OwningProcess -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1; bun server/dist/server.js\")"
     ]
   }
 }
