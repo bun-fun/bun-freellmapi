@@ -323,5 +323,26 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
     return jsonResponse({ success: true, enabled: newEnabled === 1 });
   }
 
+  // Toggle all keys for a platform enabled/disabled
+  if (path.startsWith('/api/keys/platform/') && req.method === 'PATCH') {
+    const platform = path.split('/').pop();
+    if (!platform) return new Response('Invalid platform', { status: 400 });
+    try {
+      const body = await req.json() as { enabled: boolean };
+      const db = getDb();
+      const rows = db.prepare('SELECT id FROM api_keys WHERE platform = ?').all(platform) as { id: number }[];
+      if (rows.length === 0) return jsonResponse({ success: true, changed: 0 });
+      const enabled = body.enabled ? 1 : 0;
+      const ids = rows.map(r => r.id);
+      const placeholders = ids.map(() => '?').join(',');
+      db.prepare(`UPDATE api_keys SET enabled = ? WHERE id IN (${placeholders})`).run(enabled, ...ids);
+      // Update model enablement to match
+      db.prepare(`UPDATE models SET enabled = ? WHERE platform = ?`).run(enabled, platform);
+      return jsonResponse({ success: true, changed: rows.length });
+    } catch (err: any) {
+      return jsonResponse({ error: { message: err.message } }, 400);
+    }
+  }
+
   return new Response('Not Found', { status: 404 });
 }
