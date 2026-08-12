@@ -1,7 +1,12 @@
 import { getDb } from '../../db/index.js';
-import { getAllPenalties } from '../../services/router.js';
+import {
+  getAllPenalties,
+  getRoutingScores,
+  setRoutingStrategy,
+  setCustomWeights,
+} from '../../services/router.js';
+import type { RoutingStrategy, RoutingWeights } from '../../services/scoring.js';
 import { jsonResponse } from '../../lib/json.js';
-import { z } from 'zod';
 
 export async function fallbackRoute(req: Request, url: URL): Promise<Response> {
   const path = url.pathname;
@@ -175,22 +180,18 @@ export async function fallbackRoute(req: Request, url: URL): Promise<Response> {
     });
   }
 
-  // Routing config — get/put routing strategy settings
+  // Routing config — get/put routing strategy settings. GET returns the live
+  // scoreboard the dashboard sorts by (per-axis breakdown + final score under
+  // the active strategy's weights, matching getRoutingScores).
   if (path === '/api/fallback/routing' && req.method === 'GET') {
-    const db = getDb();
-    const strategy = db.prepare("SELECT value FROM settings WHERE key = 'routing_strategy'").get() as { value: string } | undefined;
-    return jsonResponse({
-      strategy: strategy?.value ?? 'auto',
-      settings: {},
-    });
+    return jsonResponse(getRoutingScores());
   }
 
   if (path === '/api/fallback/routing' && req.method === 'PUT') {
     try {
-      const body = await req.json() as { strategy?: string };
-      const db = getDb();
-      const strategy = body.strategy ?? 'auto';
-      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('routing_strategy', ?)").run(strategy);
+      const body = await req.json() as { strategy?: string; weights?: RoutingWeights };
+      setRoutingStrategy((body.strategy ?? 'balanced') as RoutingStrategy);
+      if (body.weights) setCustomWeights(body.weights);
       return jsonResponse({ success: true });
     } catch (err: any) {
       return jsonResponse({ error: { message: err.message } }, 400);

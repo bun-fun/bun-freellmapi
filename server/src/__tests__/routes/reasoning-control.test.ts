@@ -3,7 +3,7 @@ import type { Express } from 'express';
 import { createApp } from '../../app.js';
 import { initDb, getDb, getUnifiedApiKey } from '../../db/index.js';
 import { mintDashboardToken } from '../helpers/auth.js';
-import { effortFromAnthropicThinking } from '../../routes/anthropic.js';
+import { effortFromAnthropicThinking } from '../../routes/bun/anthropic.js';
 
 // Request-side reasoning control (reasoning_effort / reasoning:{effort} /
 // Anthropic thinking:{budget_tokens}) and inline <think> extraction, driven

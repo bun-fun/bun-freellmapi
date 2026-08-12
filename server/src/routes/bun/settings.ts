@@ -8,6 +8,13 @@ import {
   setUnifyOverrides,
   unifyOverridesSchema,
 } from '../../services/model-groups.js';
+import {
+  getSavedFusionConfig,
+  setSavedFusionConfig,
+  getFusionMaxK,
+  savedFusionConfigSchema,
+} from '../../services/fusion.js';
+import { getClaudeModelMap, setClaudeModelMap } from '../../services/anthropic-map.js';
 
 export async function settingsRoute(req: Request, _url: URL): Promise<Response> {
   const path = new URL(req.url).pathname;
@@ -50,18 +57,25 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
     }
   }
 
-  // Fusion settings
+  // Fusion settings — GET/PUT return the full { config, maxK } shape the
+  // dashboard's Fusion page renders (config.mode/models/judge/k/strategy/
+  // expose_panel). PUT dedupes the panel and clamps k to the operator cap via
+  // the fusion service, so the stored value always passes savedFusionConfigSchema.
   if (path === '/api/settings/fusion') {
-    const db = getDb();
     if (req.method === 'GET') {
-      const row = db.prepare("SELECT value FROM settings WHERE key = 'fusion_config'").get() as { value: string } | undefined;
-      return jsonResponse(row?.value ? JSON.parse(row.value) : { enabled: false, models: [], judgeModel: null });
+      return jsonResponse({ config: getSavedFusionConfig(), maxK: getFusionMaxK() });
     }
     if (req.method === 'PUT') {
       try {
         const body = await req.json();
-        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('fusion_config', ?)").run(JSON.stringify(body));
-        return jsonResponse({ success: true });
+        // Validate before persisting: an invalid body would otherwise be stored
+        // verbatim and become unreadable — getSavedFusionConfig falls back to
+        // the default and every dashboard save silently reverts.
+        const parsed = savedFusionConfigSchema.safeParse(body);
+        if (!parsed.success) {
+          return jsonResponse({ error: { message: 'Invalid fusion config: ' + parsed.error.errors.map(e => e.message).join(', ') } }, 400);
+        }
+        return jsonResponse({ config: setSavedFusionConfig(parsed.data), maxK: getFusionMaxK() });
       } catch (err: any) {
         return jsonResponse({ error: { message: err.message } }, 400);
       }
@@ -81,6 +95,22 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
         if (body.enabled !== undefined) setUnifyEnabled(body.enabled);
         if (body.overrides !== undefined) setUnifyOverrides(body.overrides);
         return jsonResponse({ enabled: isUnifyEnabled(), overrides: getUnifyOverrides() });
+      } catch (err: any) {
+        return jsonResponse({ error: { message: err.message } }, 400);
+      }
+    }
+  }
+
+  // Anthropic model map — GET returns the current family→model mapping, PUT
+  // accepts a partial patch and persists the merged result.
+  if (path === '/api/settings/anthropic-map') {
+    if (req.method === 'GET') {
+      return jsonResponse({ map: getClaudeModelMap() });
+    }
+    if (req.method === 'PUT') {
+      try {
+        const body = await req.json();
+        return jsonResponse({ map: setClaudeModelMap(body) });
       } catch (err: any) {
         return jsonResponse({ error: { message: err.message } }, 400);
       }

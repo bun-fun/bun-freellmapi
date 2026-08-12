@@ -271,7 +271,7 @@ export function seedCatalogModels(db: DatabaseType): void {
 
   // ── Media models ─────────────────────────────────────────────────────────
   const insertMedia = db.prepare(`
-    INSERT OR IGNORE INTO media_models (platform, model_id, display_name, media_type, enabled)
+    INSERT OR IGNORE INTO media_models (platform, model_id, display_name, modality, enabled)
     VALUES (?, ?, ?, ?, 1)
   `);
 

@@ -19,11 +19,14 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
     if (authHeader?.startsWith('Bearer ')) {
       const token = authHeader.slice(7).trim();
       if (token) {
+        // Use the same lookup as lib/auth.ts — hash the raw token and match
+        // against token_hash with expires_at_ms guard.
+        const hash = crypto.createHash('sha256').update(token).digest('hex');
         const session = db.prepare(`
-          SELECT u.username FROM sessions s
+          SELECT u.email AS username FROM sessions s
           JOIN users u ON s.user_id = u.id
-          WHERE s.token = ? AND s.expires_at > datetime('now')
-        `).get(token) as { username: string } | undefined;
+          WHERE s.token_hash = ? AND s.expires_at_ms > ?
+        `).get(hash, Date.now()) as { username: string } | undefined;
         if (session) {
           authenticated = true;
           email = session.username;
@@ -45,8 +48,8 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
       }
 
       const db = getDb();
-      // Client sends "email" but the Bun fork uses "username" (default: "admin")
-      const user = db.prepare('SELECT * FROM users WHERE username = ?').get(email) as any;
+      // The new users table uses `email` as the primary lookup column.
+      const user = db.prepare('SELECT id, email, password_hash, salt FROM users WHERE email = ?').get(email) as any;
 
       if (!user) {
         return jsonResponse({ error: { message: 'Invalid email or password', type: 'authentication_error' } }, 401);
@@ -57,15 +60,15 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
         return jsonResponse({ error: { message: 'Invalid email or password', type: 'authentication_error' } }, 401);
       }
 
-      const token = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      const expiresAtMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
 
-      db.prepare('INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, ?)').run(user.id, token, expiresAt);
+      db.prepare('INSERT INTO sessions (user_id, token_hash, expires_at_ms, created_at) VALUES (?, ?, ?, ?)').run(
+        user.id, tokenHash, expiresAtMs, new Date().toISOString()
+      );
 
-      return jsonResponse({
-        token,
-        email: user.username,
-      });
+      return jsonResponse({ token: rawToken, email: user.email });
     } catch (err: any) {
       return jsonResponse({ error: { message: err.message } }, 400);
     }
@@ -93,14 +96,17 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
 
       const salt = crypto.randomBytes(16).toString('hex');
       const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
-      db.prepare('INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)').run(email, hash, salt);
+      db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run(email, hash);
 
-      const token = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-      const userRow = db.prepare('SELECT id FROM users WHERE username = ?').get(email) as { id: number };
-      db.prepare('INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, ?)').run(userRow.id, token, expiresAt);
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      const expiresAtMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
+      const userRow = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: number };
+      db.prepare('INSERT INTO sessions (user_id, token_hash, expires_at_ms, created_at) VALUES (?, ?, ?, ?)').run(
+        userRow.id, tokenHash, expiresAtMs, new Date().toISOString()
+      );
 
-      return jsonResponse({ token, email }, 201);
+      return jsonResponse({ token: rawToken, email }, 201);
     } catch (err: any) {
       return jsonResponse({ error: { message: err.message } }, 400);
     }
@@ -120,7 +126,8 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
       const token = authHeader.slice(7).trim();
       if (token) {
         const db = getDb();
-        db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+        const hash = crypto.createHash('sha256').update(token).digest('hex');
+        db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hash);
       }
     }
     return jsonResponse({ success: true });
@@ -144,7 +151,7 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
       }
 
       const db = getDb();
-      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(auth.user.id) as any;
+      const user = db.prepare('SELECT id, password_hash, salt FROM users WHERE id = ?').get(auth.user.id) as any;
 
       const derived = crypto.pbkdf2Sync(currentPassword, user.salt, 100000, 64, 'sha512').toString('hex');
       if (derived !== user.password_hash) {
@@ -155,10 +162,11 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
       const newHash = crypto.pbkdf2Sync(newPassword, newSalt, 100000, 64, 'sha512').toString('hex');
       db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(newHash, newSalt, auth.user.id);
 
-      // Invalidate all other sessions
+      // Invalidate all other sessions (keep the current one)
       const authHeader = req.headers.get('Authorization');
       const currentToken = authHeader!.slice(7).trim();
-      db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(auth.user.id, currentToken);
+      const currentHash = crypto.createHash('sha256').update(currentToken).digest('hex');
+      db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(auth.user.id, currentHash);
 
       return jsonResponse({ success: true });
     } catch (err: any) {
@@ -193,12 +201,12 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
 
       const db = getDb();
       // Check if email is already taken
-      const existing = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(newEmail, auth.user.id);
+      const existing = db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').get(newEmail, auth.user.id);
       if (existing) {
         return jsonResponse({ error: { message: 'Email is already taken', type: 'email_taken' } }, 409);
       }
 
-      db.prepare('UPDATE users SET username = ? WHERE id = ?').run(newEmail, auth.user.id);
+      db.prepare('UPDATE users SET email = ? WHERE id = ?').run(newEmail, auth.user.id);
       return jsonResponse({ success: true, email: newEmail });
     } catch (err: any) {
       return jsonResponse({ error: { message: err.message } }, 400);

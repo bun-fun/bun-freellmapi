@@ -33,6 +33,10 @@ import {
   mediaListRoute, mediaUsageRoute, mediaCustomRoute,
   mediaUpdateRoute, mediaDeleteRoute,
 } from './routes/bun/media-dashboard.js';
+import {
+  embeddingsListRoute, embeddingsUsageRoute, embeddingsUpdateRoute,
+  embeddingsCustomRoute, embeddingsDeleteRoute,
+} from './routes/bun/embeddings-dashboard.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -95,14 +99,15 @@ async function start() {
       else if (pathname === '/api/generate' && req.method === 'POST') res = await ollamaGenerateRoute(req);
       else if (pathname === '/api/embed' && req.method === 'POST') res = await ollamaEmbedRoute(req, false);
       else if (pathname === '/api/embeddings' && req.method === 'POST') res = await ollamaEmbedRoute(req, true);
+      else if (pathname === '/api/embeddings' && (req.method === 'GET' || req.method === 'PUT')) {
+        // Dashboard management of embedding providers — dashboard session auth.
+        const auth = authenticateRequest(req);
+        if (!auth.ok) return addCors(req, auth.response);
+        return addCors(req, req.method === 'PUT'
+          ? await embeddingsUpdateRoute(req)
+          : embeddingsListRoute());
+      }
       else {
-        // Fall through to dashboard route for /api/embeddings if it's a valid session
-        if (pathname === '/api/embeddings') {
-          const auth = authenticateRequest(req);
-          if (!auth.ok) return addCors(req, auth.response);
-          const er = await embeddingsRoute(req, url);
-          return addCors(req, er);
-        }
         res = new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: { 'Content-Type': 'application/json' } });
       }
       return addCors(req, res);
@@ -180,6 +185,26 @@ async function start() {
       const id = pathname.split('/').pop()!;
       const res = await mediaUpdateRoute(req, id);
       return addCors(req, res);
+    }
+
+    // Embeddings dashboard routes (the exact /api/embeddings GET/PUT also land
+    // here when Ollama emulation is off; the /usage and /custom/* paths never
+    // enter the emulation block).
+    if (pathname === '/api/embeddings' && req.method === 'GET') {
+      return addCors(req, embeddingsListRoute());
+    }
+    if (pathname === '/api/embeddings' && req.method === 'PUT') {
+      return addCors(req, await embeddingsUpdateRoute(req));
+    }
+    if (pathname === '/api/embeddings/usage' && req.method === 'GET') {
+      return addCors(req, embeddingsUsageRoute());
+    }
+    if (pathname === '/api/embeddings/custom' && req.method === 'POST') {
+      return addCors(req, await embeddingsCustomRoute(req));
+    }
+    if (pathname.startsWith('/api/embeddings/custom/') && req.method === 'DELETE') {
+      const id = pathname.split('/').pop()!;
+      return addCors(req, embeddingsDeleteRoute(id));
     }
 
     // Liveness / readiness probes (unauthenticated)

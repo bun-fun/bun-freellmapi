@@ -1,9 +1,20 @@
+import crypto from 'crypto';
 import { getDb } from '../../db/index.js';
 import { encrypt, decrypt, maskKey } from '../../lib/crypto.js';
 import { jsonResponse } from '../../lib/json.js';
-import { verifyPassword } from '../../lib/password.js';
 import { z } from 'zod';
 import { resolveProvider } from '../../providers/index.js';
+
+// PBKDF2 password verification — must match the Bun fork's auth.ts / db/index.ts
+// which stores password_hash as a plain hex PBKDF2 digest and salt in a
+// separate column. (Not scrypt like lib/password.ts — that's the upstream
+// format and doesn't match this fork's users table.)
+function verifyDashboardPassword(password: string, storedHash: string, salt: string): boolean {
+  const derived = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  // Constant-time compare to avoid timing side-channels.
+  if (derived.length !== storedHash.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(derived, 'hex'), Buffer.from(storedHash, 'hex'));
+}
 
 const PLATFORMS = [
   'google', 'groq', 'cerebras', 'sambanova', 'nvidia', 'mistral',
@@ -151,9 +162,11 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
     }
 
     // Re-verify the password against the first user account (single-user system).
+    // Uses PBKDF2 to match the Bun fork's password storage format (salt is a
+    // separate column, hash is a plain hex digest — not scrypt$...$...).
     const db = getDb();
-    const user = db.prepare('SELECT id, password_hash FROM users LIMIT 1').get() as { id: number; password_hash: string } | undefined;
-    if (!user || !verifyPassword(password, user.password_hash)) {
+    const user = db.prepare('SELECT id, password_hash, salt FROM users LIMIT 1').get() as { id: number; password_hash: string; salt: string } | undefined;
+    if (!user || !user.salt || !verifyDashboardPassword(password, user.password_hash, user.salt)) {
       return jsonResponse({ error: { message: 'Password verification failed', type: 'authentication_error' } }, 403);
     }
 
