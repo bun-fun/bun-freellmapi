@@ -4,6 +4,7 @@ import { encrypt, decrypt, maskKey } from '../../lib/crypto.js';
 import { jsonResponse } from '../../lib/json.js';
 import { z } from 'zod';
 import { resolveProvider } from '../../providers/index.js';
+import { resolveCustomEndpointKey } from '../../services/custom-endpoint.js';
 
 // PBKDF2 password verification — must match the Bun fork's auth.ts / db/index.ts
 // which stores password_hash as a plain hex PBKDF2 digest and salt in a

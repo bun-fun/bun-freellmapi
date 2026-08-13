@@ -15,6 +15,7 @@ import {
   savedFusionConfigSchema,
 } from '../../services/fusion.js';
 import { getClaudeModelMap, setClaudeModelMap } from '../../services/anthropic-map.js';
+import { getCompressionStats } from '../../services/compression/stats.js';
 
 export async function settingsRoute(req: Request, _url: URL): Promise<Response> {
   const path = new URL(req.url).pathname;
@@ -37,6 +38,11 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
     const settings: Record<string, any> = {};
     for (const r of rows) settings[r.key] = r.value;
     return jsonResponse(settings);
+  }
+
+  // Compression stats
+  if (path === '/api/compression/stats' && req.method === 'GET') {
+    return jsonResponse(getCompressionStats());
   }
 
   // Compression settings
