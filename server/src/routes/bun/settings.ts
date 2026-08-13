@@ -1,6 +1,7 @@
 import { getUnifiedApiKey, regenerateUnifiedKey, getDb } from '../../db/index.js';
 import { jsonResponse, errorResponse } from '../../lib/json.js';
 import { z } from 'zod';
+import { getAppVersion } from '../../lib/app-version.js';
 import {
   isUnifyEnabled,
   setUnifyEnabled,
@@ -19,6 +20,11 @@ import { getCompressionStats } from '../../services/compression/stats.js';
 
 export async function settingsRoute(req: Request, _url: URL): Promise<Response> {
   const path = new URL(req.url).pathname;
+
+  // App version
+  if (path === '/api/settings/version' && req.method === 'GET') {
+    return jsonResponse({ version: getAppVersion() });
+  }
 
   // Unified API key
   if (path === '/api/settings/api-key') {

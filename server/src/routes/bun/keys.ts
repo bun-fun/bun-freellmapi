@@ -3,7 +3,7 @@ import { getDb } from '../../db/index.js';
 import { encrypt, decrypt, maskKey } from '../../lib/crypto.js';
 import { jsonResponse } from '../../lib/json.js';
 import { z } from 'zod';
-import { resolveProvider } from '../../providers/index.js';
+import { resolveProvider, getAllProviders } from '../../providers/index.js';
 import { resolveCustomEndpointKey } from '../../services/custom-endpoint.js';
 
 // PBKDF2 password verification — must match the Bun fork's auth.ts / db/index.ts
@@ -50,6 +50,43 @@ function enabledModelCount(db: ReturnType<typeof getDb>, platform: string): numb
 export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
+
+  // Provider checklist
+  if (path === '/api/keys/providers' && req.method === 'GET') {
+    const db = getDb();
+    const countRows = db.prepare(`
+      SELECT platform, COUNT(*) AS total_keys,
+        SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled_keys
+      FROM api_keys GROUP BY platform
+    `).all() as Array<{ platform: string; total_keys: number; enabled_keys: number }>;
+    const countsByPlatform = new Map(countRows.map(r => [r.platform, r]));
+
+    const providers = getAllProviders()
+      .filter(p => p.platform !== 'custom')
+      .map(p => {
+        const counts = countsByPlatform.get(p.platform);
+        const keyCount = counts?.total_keys ?? 0;
+        return {
+          platform: p.platform,
+          name: p.name,
+          keyless: p.keyless,
+          configured: keyCount > 0,
+          keyCount,
+          enabledKeyCount: counts?.enabled_keys ?? 0,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const configured = providers.filter(p => p.configured).length;
+    return jsonResponse({
+      providers,
+      summary: {
+        total: providers.length,
+        configured,
+        unconfigured: providers.length - configured,
+      },
+    });
+  }
 
   // List all keys (masked)
   if (path === '/api/keys' && req.method === 'GET') {
