@@ -1,9 +1,6 @@
-.github/
 node_modules/
 dist/
 server/data/
-.claude/
-
 # Runtime data dir when the server is launched from the repo root (same
 # contents as server/data — DB + keyfile — so same rule).
 /data/
@@ -18,17 +15,12 @@ server/data/
 .env.local
 .DS_Store
 
-# Debug and temporary files
-*.log
+# TypeScript incremental build cache
+*.tsbuildinfo
 
 # Personal deployment scripts (contain keys/credentials — kept local)
 deploy-pi.sh
 update-hermes.sh
-bun.lock
-
-.arts/
-.catpaw/
-.codeartsdoer/
 
 # Monetization planning — private, never committed
 monetization/

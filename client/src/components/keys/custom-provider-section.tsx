@@ -148,10 +148,13 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="chat">{t('keys.customTypeChat')}</SelectItem>
-              <SelectItem value="embedding">{t('keys.customTypeEmbedding')}</SelectItem>
-              <SelectItem value="image">{t('keys.customTypeImage')}</SelectItem>
-              <SelectItem value="audio">{t('keys.customTypeAudio')}</SelectItem>
+              {/* label prop drives the trigger's SelectValue text (Base UI falls
+                  back to the raw value without it, showing "chat" instead of
+                  the translated label — #837). */}
+              <SelectItem value="chat" label={t('keys.customTypeChat')}>{t('keys.customTypeChat')}</SelectItem>
+              <SelectItem value="embedding" label={t('keys.customTypeEmbedding')}>{t('keys.customTypeEmbedding')}</SelectItem>
+              <SelectItem value="image" label={t('keys.customTypeImage')}>{t('keys.customTypeImage')}</SelectItem>
+              <SelectItem value="audio" label={t('keys.customTypeAudio')}>{t('keys.customTypeAudio')}</SelectItem>
             </SelectContent>
           </Select>
         </div>

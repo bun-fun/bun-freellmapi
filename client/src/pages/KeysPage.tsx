@@ -4,15 +4,17 @@ import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { PageHeader } from '@/components/page-header'
-import type { ApiKey } from '../../../shared/types'
+import type { ApiKey, Platform } from '../../../shared/types'
 import { Plus, Download } from 'lucide-react'
 import { useI18n } from '@/i18n'
 import type { HealthData } from '@/components/keys/shared'
 import { QuotaSignalsSection } from '@/components/keys/quota-signals-section'
 import { UnifiedKeySection } from '@/components/keys/unified-key-section'
+import { ClientProfilesSection } from '@/components/keys/client-profiles-section'
 import { ProxySettingsSection } from '@/components/keys/proxy-settings-section'
 import { AnthropicSection } from '@/components/keys/anthropic-section'
 import { ProviderList } from '@/components/keys/provider-list'
+import { ProviderChecklistSection } from '@/components/keys/provider-checklist-section'
 import { AddKeyDialog } from '@/components/keys/add-key-dialog'
 import { ExportKeysDialog } from '@/components/keys/export-keys-dialog'
 import { AgentCompatibilitySection } from '@/components/keys/agent-compatibility-section'
@@ -31,7 +33,15 @@ export default function KeysPage() {
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<KeysTab>('providers')
   const [addOpen, setAddOpen] = useState(false)
+  // Provider the Add key dialog opens preselected to, when the add flow was
+  // entered from a checklist chip rather than the generic Add key button.
+  const [addPlatform, setAddPlatform] = useState<Platform | ''>('')
   const [exportOpen, setExportOpen] = useState(false)
+
+  const openAddKey = (platform: Platform | '' = '') => {
+    setAddPlatform(platform)
+    setAddOpen(true)
+  }
 
   // Kept at page level for the header's "Check all" gate; ProviderList runs the
   // same query (deduped by react-query) for the list itself.
@@ -73,7 +83,7 @@ export default function KeysPage() {
               </Button>
             )}
             {tab === 'providers' && (
-              <Button size="sm" onClick={() => setAddOpen(true)}>
+              <Button size="sm" onClick={() => openAddKey()}>
                 <Plus className="size-3.5" />
                 {t('keys.addKey')}
               </Button>
@@ -92,6 +102,7 @@ export default function KeysPage() {
         {tab === 'apiKey' && (
           <>
             <UnifiedKeySection />
+            <ClientProfilesSection />
             <ProxySettingsSection />
           </>
         )}
@@ -103,10 +114,15 @@ export default function KeysPage() {
           <QuotaSignalsSection states={(healthData?.quotaStates ?? []).slice(0, 24)} />
         )}
 
-        {tab === 'providers' && <ProviderList onAddKey={() => setAddOpen(true)} />}
+        {tab === 'providers' && (
+          <>
+            <ProviderChecklistSection onAddKey={platform => openAddKey(platform as Platform)} />
+            <ProviderList onAddKey={() => openAddKey()} />
+          </>
+        )}
       </div>
 
-      <AddKeyDialog open={addOpen} onOpenChange={setAddOpen} />
+      <AddKeyDialog open={addOpen} onOpenChange={setAddOpen} initialPlatform={addPlatform || undefined} />
       {/* Mounted only while open so the export flow always starts at step one
           and never retains a previously typed password. */}
       {exportOpen && <ExportKeysDialog open={exportOpen} onOpenChange={setExportOpen} />}

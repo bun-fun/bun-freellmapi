@@ -75,6 +75,10 @@ export interface RoutingData {
   strategy: RoutingStrategy
   weights: RoutingWeights | null
   customWeights: RoutingWeights
+  /** Exploration toggle: when on, unmeasured models get a guaranteed chance to
+   *  be tried so they build reliability/speed data (#685 follow-up). Required:
+   *  the server always sends it, and the checkbox renders straight from it. */
+  exploreEnabled: boolean
   scores: (RoutingScore & { platform: string; modelId: string; displayName: string; enabled: boolean })[]
 }
 
@@ -300,6 +304,7 @@ export const platformColors: Record<string, string> = {
   navy:         '#1d4ed8',
   nara:         '#2563eb',
   sealion:     '#0ea5e9',
+  anyapi:      '#0891b2',
   modelscope:  '#624aff',
   aihorde:     '#dc2626',
 }

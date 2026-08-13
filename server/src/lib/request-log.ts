@@ -34,6 +34,11 @@ function setSettingIfMissing(db: LogTx, key: string, value: string): void {
 // is logged identically. Lives in a neutral lib module to avoid an import cycle
 // between the fusion service and the proxy route that both call it.
 //
+// Status is 'success', 'error', or 'canceled' (#752 — the client hung up
+// mid-attempt). A canceled request counts toward request totals — it happened —
+// but toward NEITHER success nor error: rates and scoring must read
+// success/(success+error), never success/total.
+//
 // In addition to the raw row, we update two durable aggregates so analytics
 // totals survive the raw-row prune (REQUEST_ANALYTICS_MAX_ROWS):
 //   - request_hourly: per-hour bucket counts and tokens (max window = 30d).
@@ -44,7 +49,9 @@ function setSettingIfMissing(db: LogTx, key: string, value: string): void {
 export function logRequest(
   platform: string,
   modelId: string,
-  keyId: number,
+  // NULL for rejections that never reached routing (no key was involved),
+  // e.g. an over-limit request body turned away at the parser.
+  keyId: number | null,
   status: string,
   inputTokens: number,
   outputTokens: number,
@@ -113,9 +120,10 @@ export function logRequest(
 // mid-stream error row, or the last per-attempt failure row). Called once per
 // request by the fallback loop AFTER the response is finished, so the write is
 // off the client's latency path. Zero-failure single-attempt successes write
-// exactly one 'ok' row; a trace with no parent row (e.g. a client abort before
-// any attempt was logged) writes nothing — consistent with the `requests`
-// table, which records nothing for those either.
+// exactly one 'ok' row. A trace with no parent row writes nothing — since the
+// fallback loop logs a 'canceled' row for pure client aborts (#752), that is
+// now only the loop-top stop paths, whose failed attempts each wrote their own
+// row already.
 export function persistRequestAttempts(trace: RequestTrace): void {
   if (trace.records.length === 0 || trace.lastRequestRowId == null) return;
   try {

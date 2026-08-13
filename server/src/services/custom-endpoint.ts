@@ -53,12 +53,27 @@ function touch(db: Db, id: number, label: string | undefined): void {
     .run(label ?? null, id);
 }
 
+/**
+ * The name a custom endpoint takes when the operator did not give it one: its
+ * host and port. Every endpoint used to default to the literal 'Custom', so the
+ * panels that identify a key by label alone (analytics, cooldowns, quota
+ * signals) showed a column of identical rows once you ran more than one relay
+ * (#705). The host is what actually tells two endpoints apart.
+ */
+function defaultCustomEndpointLabel(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host || 'Custom';
+  } catch {
+    return 'Custom';
+  }
+}
+
 function insertKey(db: Db, baseUrl: string, secret: string, label: string | undefined): ResolvedEndpointKey {
   const { encrypted, iv, authTag } = encrypt(secret);
   const r = db.prepare(`
     INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, base_url)
     VALUES ('custom', ?, ?, ?, ?, 'unknown', 1, ?)
-  `).run(label ?? 'Custom', encrypted, iv, authTag, baseUrl);
+  `).run(label ?? defaultCustomEndpointLabel(baseUrl), encrypted, iv, authTag, baseUrl);
   return { keyId: Number(r.lastInsertRowid), storedKey: secret, created: true };
 }
 

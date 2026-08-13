@@ -20,6 +20,7 @@ import { openCommandPalette } from '@/components/command-palette-state'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { SettingsDialog } from '@/components/settings-dialog'
 import { Toaster } from '@/components/toaster'
+import { UpdateReminder } from '@/components/update-reminder'
 import { usePremium } from '@/hooks/use-premium'
 import { I18nProvider, useI18n } from '@/i18n'
 import { logout } from '@/lib/api'
@@ -373,6 +374,7 @@ function App() {
                 </main>
                 <Toaster />
                 <CommandPalette />
+                <UpdateReminder />
               </div>
             </AuthGate>
           </BrowserRouter>

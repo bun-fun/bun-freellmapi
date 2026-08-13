@@ -108,6 +108,11 @@ interface CatalogModel {
   modality?: string;
   /** Short display note for media models (e.g. "Keyless - up to 1024x1024"). */
   mediaNote?: string;
+  /** Adapter request flavor for media rows, where one platform hosts more than
+   *  one deployment style (cloudflare images: absent/'json' = JSON body,
+   *  'multipart' = form-data, which the FLUX.2 family requires). Mirrors the
+   *  same field on CatalogTranscriptionModel and lands in meta_json. */
+  requestStyle?: string | null;
 }
 
 interface CatalogEmbedding {
@@ -207,6 +212,7 @@ function isCatalog(value: unknown): value is Catalog {
         typeof m?.modelId === 'string' &&
         typeof m?.displayName === 'string' &&
         typeof m?.enabled === 'boolean' &&
+        (m.requestStyle === undefined || m.requestStyle === null || typeof m.requestStyle === 'string') &&
         !!m?.limits &&
         typeof m.limits === 'object',
     ) &&
@@ -264,12 +270,12 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
   const updateMedia = db.prepare(`
     UPDATE media_models SET
       display_name = @displayName, modality = @modality, priority = @priority,
-      quota_label = @quotaLabel, enabled = @enabled
+      quota_label = @quotaLabel, enabled = @enabled, meta_json = @metaJson
     WHERE id = @id
   `);
   const insertMedia = db.prepare(`
-    INSERT INTO media_models (platform, model_id, display_name, modality, priority, enabled, quota_label)
-    VALUES (@platform, @modelId, @displayName, @modality, @priority, @enabled, @quotaLabel)
+    INSERT INTO media_models (platform, model_id, display_name, modality, priority, enabled, quota_label, meta_json)
+    VALUES (@platform, @modelId, @displayName, @modality, @priority, @enabled, @quotaLabel, @metaJson)
   `);
   // Transcription rows share media_models but carry adapter metadata in
   // meta_json (subtitle capability, upload ceiling, request flavor).
@@ -320,11 +326,16 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
         if (isCatalogModelTombstoned(db, 'media', m.platform, m.modelId)) continue;
         inMediaCatalog.add(`${m.platform}:${m.modelId}`);
         const mrow = selectMedia.get(m.platform, m.modelId) as { id: number; enabled: number } | undefined;
+        // Generative-media meta carries only the adapter request flavor today;
+        // a row without one stores NULL so the adapter keeps its default.
+        const mmeta: Record<string, unknown> = {};
+        if (typeof m.requestStyle === 'string') mmeta.requestStyle = m.requestStyle;
         const mfields = {
           displayName: m.displayName,
           modality,
           priority: m.intelligenceRank ?? 0,
           quotaLabel: m.mediaNote ?? '',
+          metaJson: Object.keys(mmeta).length > 0 ? JSON.stringify(mmeta) : null,
         };
         if (mrow) {
           const enabled = m.enabled ? mrow.enabled : 0; // catalog disable wins; local disable wins

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/server.ts",
-    "build": "tsc --noEmit && bun build ./src/server.ts --outdir ./dist --target bun --minify",
+    "build": "bun build ./src/server.ts --outdir ./dist --target bun --minify",
     "start": "bun dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest"

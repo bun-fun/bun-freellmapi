@@ -7,6 +7,7 @@ import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { ConfirmButton } from '@/components/confirm-button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { CopyButton } from '@/components/copy-button'
 import { TableSkeleton } from '@/components/ui/skeleton'
@@ -31,6 +32,7 @@ import {
   reviewModelSettings,
   RANK_MAX,
   RANK_MIN,
+  SIZE_LABELS,
   type ModelSettingsPatch,
   type ModelSettingsSource,
 } from '@/lib/model-settings'
@@ -308,13 +310,13 @@ function ProviderSettingsRow({
   // `members` is rebuilt on every render, so depend on the model's own values
   // rather than the object identity — otherwise the form resets mid-edit.
   const {
-    modelDbId, displayName, contextWindow, intelligenceRank, speedRank,
+    modelDbId, displayName, contextWindow, intelligenceRank, speedRank, sizeLabel,
     rpmLimit, rpdLimit, tpmLimit, tpdLimit, supportsVision, supportsTools, enabled,
   } = model
   const source: ModelSettingsSource = useMemo(() => ({
-    displayName, contextWindow, intelligenceRank, speedRank,
+    displayName, contextWindow, intelligenceRank, speedRank, sizeLabel,
     rpmLimit, rpdLimit, tpmLimit, tpdLimit, supportsVision, supportsTools, enabled,
-  }), [displayName, contextWindow, intelligenceRank, speedRank, rpmLimit, rpdLimit,
+  }), [displayName, contextWindow, intelligenceRank, speedRank, sizeLabel, rpmLimit, rpdLimit,
     tpmLimit, tpdLimit, supportsVision, supportsTools, enabled])
 
   const [form, setForm] = useState(() => modelSettingsForm(source))
@@ -417,8 +419,26 @@ function ProviderSettingsRow({
 
       {/* Router inputs: the two ranks feed the scoring axes, the four limits
           feed rate-limit accounting. Editable because the catalog can be wrong
-          for a given account, or silent about a brand-new model (#551). */}
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
+          for a given account, or silent about a brand-new model (#551). The
+          capability tier drives the intelligence axis — a custom model without
+          a recognized tier scores 0, so it gets a picker here (#685). */}
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-7">
+        {/* Full-width on the 2/3-column layouts so the six number fields
+            below still tile evenly; one row of seven on desktop. */}
+        <label className="col-span-2 space-y-1 text-xs text-muted-foreground sm:col-span-3 md:col-span-1" title={t('models.sizeLabelHint')}>
+          <FieldLabel text={t('models.sizeLabel')} overridden={overridden.has('sizeLabel')} />
+          <Select value={form.sizeLabel} onValueChange={value => setField('sizeLabel', value ?? '')}>
+            <SelectTrigger className="w-full" aria-label={t('models.sizeLabel')}>
+              <SelectValue placeholder={t('models.sizeLabelNone')} />
+            </SelectTrigger>
+            <SelectContent>
+              {SIZE_LABELS.map(label => (
+                <SelectItem key={label} value={label}>{label}</SelectItem>
+              ))}
+              <SelectItem value="">{t('models.sizeLabelNone')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
         <NumberField
           label={t('models.intelligenceRank')}
           hint={t('models.rankHint')}

@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
 // Hover tooltip rendered through a portal to document.body, so it's never
@@ -23,6 +23,26 @@ export function Tooltip({ text, children, side = 'top', className }: {
     setCoords({ x, y: side === 'top' ? r.top : r.bottom })
   }
   const hide = () => setCoords(null)
+
+  // #826: a modal (copy-key / model-scope dialog) opening on top of the
+  // trigger swallows the mouseleave, so the tooltip state survives the dialog
+  // and the black box lingers after it closes. While visible, also hide on any
+  // mousemove that leaves the trigger's rect (with a small tolerance to avoid
+  // flicker at the edge) — the pointer-events-none tooltip itself never
+  // intercepts events, so this is the reliable cleanup.
+  useEffect(() => {
+    if (!coords) return
+    const onMove = (e: MouseEvent) => {
+      const el = ref.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      const inside = e.clientX >= r.left - 4 && e.clientX <= r.right + 4
+        && e.clientY >= r.top - 4 && e.clientY <= r.bottom + 4
+      if (!inside) hide()
+    }
+    document.addEventListener('mousemove', onMove)
+    return () => document.removeEventListener('mousemove', onMove)
+  }, [coords])
 
   return (
     <span

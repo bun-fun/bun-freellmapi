@@ -1,6 +1,8 @@
 import { getDb } from '../db/index.js';
 import { resolveProvider } from '../providers/index.js';
 import { decrypt } from '../lib/crypto.js';
+import { decryptProxyUrl } from '../lib/key-proxy.js';
+import { withKeyProxy } from '../lib/proxy.js';
 import type { Platform, KeyStatus } from '@freellmapi/shared/types.js';
 import { inferQuotaPoolKey } from './provider-quota.js';
 import type { Scheduler } from '../lib/scheduler.js';
@@ -77,13 +79,17 @@ export async function checkKeyHealth(keyId: number): Promise<KeyStatus> {
 
   try {
     const apiKey = decrypt(row.encrypted_key, row.iv, row.auth_tag);
-    const validation = await provider.validateKey(apiKey, {
+    // #590: probe the key from the same exit its traffic uses. A key that is
+    // only reachable through its own proxy (the reason to set one) would
+    // otherwise be validated direct, fail, and be auto-disabled after three
+    // checks while real requests through the proxy were working fine.
+    const validation = await withKeyProxy(decryptProxyUrl(row), () => provider.validateKey(apiKey, {
       platform: row.platform as Platform,
       keyId,
       quotaPoolKey: inferQuotaPoolKey(row.platform as Platform, null),
       endpoint: 'models',
       origin: 'health',
-    });
+    }));
     const isValid = typeof validation === 'boolean' ? validation : validation.valid;
     const lastError = isValid
       ? null
@@ -157,13 +163,14 @@ export async function probeKeyValidity(keyId: number): Promise<KeyProbeOutcome> 
     if (!provider) return 'error';
 
     const apiKey = decrypt(row.encrypted_key, row.iv, row.auth_tag);
-    const validation = await provider.validateKey(apiKey, {
+    // Same reasoning as checkKeyHealth: probe through the key's own proxy (#590).
+    const validation = await withKeyProxy(decryptProxyUrl(row), () => provider.validateKey(apiKey, {
       platform: row.platform as Platform,
       keyId,
       quotaPoolKey: inferQuotaPoolKey(row.platform as Platform, null),
       endpoint: 'models',
       origin: 'probe',
-    });
+    }));
     const isValid = typeof validation === 'boolean' ? validation : validation.valid;
     return isValid ? 'valid' : 'invalid';
   } catch {

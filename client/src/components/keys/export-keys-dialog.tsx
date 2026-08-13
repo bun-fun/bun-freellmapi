@@ -25,6 +25,13 @@ const FORMAT_OPTIONS: { value: ExportFormat; label: string; ext: string }[] = [
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
 
+// #786: the desktop build has no user-set password to re-enter, and its server
+// skips re-auth for local requests, so the password step is skipped here too.
+// Only the Electron preload sets this flag: a browser reaching the same desktop
+// server over LAN still walks through the step, and the server still checks it.
+const isDesktopApp = typeof window !== 'undefined'
+  && (window as Window & { __FREEAPI_DESKTOP__?: boolean }).__FREEAPI_DESKTOP__ === true
+
 async function downloadExport(format: ExportFormat, healthyOnly: boolean, password: string) {
   const token = getToken()
   const params = new URLSearchParams({ format })
@@ -68,13 +75,16 @@ export function ExportKeysDialog({ open, onOpenChange }: { open: boolean; onOpen
     queryFn: () => apiFetch('/api/keys'),
   })
 
-  const exportableKeys = keys.filter(k => !k.keyless)
+  // The server flags what the export will really write. Counting `!keyless`
+  // here instead promised keys the export then dropped — a no-auth custom
+  // endpoint is not a "keyless provider", so it was counted and skipped (#687).
+  const exportableKeys = keys.filter(k => k.exportable)
   const exportCount = healthyOnly
     ? exportableKeys.filter(k => k.status === 'healthy').length
     : exportableKeys.length
 
-  async function handleExport(e: FormEvent) {
-    e.preventDefault()
+  async function handleExport(e?: FormEvent) {
+    e?.preventDefault()
     setExporting(true)
     setError(null)
     try {
@@ -188,12 +198,13 @@ export function ExportKeysDialog({ open, onOpenChange }: { open: boolean; onOpen
           <Button
             type="button"
             className="w-full"
-            onClick={() => setStep('password')}
-            disabled={exportCount === 0}
+            onClick={() => (isDesktopApp ? handleExport() : setStep('password'))}
+            disabled={exportCount === 0 || exporting}
           >
             <Download className="size-3.5" />
-            {t('keys.exportDownload')}
+            {exporting ? t('keys.exporting') : t('keys.exportDownload')}
           </Button>
+          {isDesktopApp && error && <FieldError error={error} />}
         </div>
         )}
       </DialogPopup>

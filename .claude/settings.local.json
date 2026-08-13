@@ -28,7 +28,10 @@
       "Bash(curl -s http://localhost:3001/api/health)",
       "Bash(rtk curl *)",
       "Bash(pkill -f 'server/dist/server')",
-      "Bash(powershell -Command \"Get-Process -Id \\(Get-NetTCPConnection -LocalPort 7860 -ErrorAction SilentlyContinue\\).OwningProcess -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1; bun server/dist/server.js\")"
+      "Bash(powershell -Command \"Get-Process -Id \\(Get-NetTCPConnection -LocalPort 7860 -ErrorAction SilentlyContinue\\).OwningProcess -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1; bun server/dist/server.js\")",
+      "Bash(powershell -Command \"Start-Sleep 5; Invoke-RestMethod -Uri 'http://localhost:7860/api/health' -Method Get | ConvertTo-Json\")",
+      "Bash(powershell -Command \"Invoke-RestMethod -Uri 'http://localhost:7860/api/keys/platform/google' -Method Patch -Headers @{'Authorization'='Bearer [REDACTED_BEARER]';'Content-Type'='application/json'} -Body '{\\\\\"enabled\\\\\":true}'\")",
+      "Bash(powershell -Command \"Stop-Process -Id 16220 -Force; Start-Sleep 1; bun server\\\\dist\\\\server.js\" 2>&1)"
     ]
   }
 }
