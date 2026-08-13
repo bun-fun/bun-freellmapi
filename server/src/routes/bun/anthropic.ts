@@ -387,6 +387,7 @@ export async function anthropicRoute(req: Request, _url: URL): Promise<Response>
   // ── Shared fallback loop hooks ──────────────────────────────────────────
   const state = newFallbackState();
   let finalResponse: Response | null = null;
+  const finalResponseRef = { value: null as Response | null };
   const attemptLog: AttemptRecord[] = [];
 
   const hooks: FallbackHooks = {
@@ -406,20 +407,21 @@ export async function anthropicRoute(req: Request, _url: URL): Promise<Response>
 
     async dispatch(route, attempt) {
       if (stream) {
-        return dispatchStreaming(route, attempt, start, reqData, completionOpts,
+        await dispatchStreaming(route, attempt, start, reqData, completionOpts,
           toolSchemas, estimatedInputTokens, messages, newMessageId,
-          requestedModel);
+          requestedModel, finalResponseRef);
+        return 'done';
       }
-      return dispatchNonStreaming(route, attempt, start, reqData, completionOpts,
+      await dispatchNonStreaming(route, attempt, start, reqData, completionOpts,
         toolSchemas, estimatedInputTokens, messages, newMessageId,
-        requestedModel);
+        requestedModel, finalResponseRef);
+      return 'done';
     },
 
     logFailure(route, err, attempt) {
       const latency = Date.now() - start;
       logRequest(route.platform, route.modelId, route.keyId, 'error',
         estimatedInputTokens, 0, latency, sanitizeProviderErrorMessage(err.message));
-      console.log(`[Anthropic] ${err.message.slice(0, 60)} from ${route.displayName}, falling back (attempt ${attempt + 1})`);
     },
 
     onFatal(route, err, attempt) {
@@ -481,7 +483,8 @@ export async function anthropicRoute(req: Request, _url: URL): Promise<Response>
 
   await runFallbackLoop(hooks);
 
-  return finalResponse ?? new Response('Internal error', { status: 500 });
+  const resp = finalResponseRef.value ?? finalResponse;
+  return resp ?? new Response('Internal error', { status: 500 });
 }
 
 /** Map the shared exhaustion kind onto an Anthropic-shaped error type. */
@@ -509,6 +512,7 @@ async function dispatchStreaming(
   messages: ChatMessage[],
   newMessageId: () => string,
   requestedModel: string,
+  finalResponseRef: { value: Response | null },
 ): Promise<DispatchOutcome> {
   const gen = route.provider.streamChatCompletion(
     route.apiKey, messages, route.modelId,
@@ -660,6 +664,7 @@ async function dispatchStreaming(
     },
   });
   // Stamp fallback headers after the response is built (loop handles the count).
+  finalResponseRef.value = resp;
   return 'done';
 }
 
@@ -675,6 +680,7 @@ async function dispatchNonStreaming(
   messages: ChatMessage[],
   newMessageId: () => string,
   requestedModel: string,
+  finalResponseRef: { value: Response | null },
 ): Promise<DispatchOutcome> {
   const result = await route.provider.chatCompletion(
     route.apiKey, messages, route.modelId,
@@ -725,6 +731,7 @@ async function dispatchNonStreaming(
       'X-Routed-Via': routedViaValue(route.platform, route.modelId),
     },
   });
+  finalResponseRef.value = resp;
   return 'done';
 }
 
