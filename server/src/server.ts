@@ -1,4 +1,4 @@
-import { initDb } from './db/index.js';
+import { initDb, getDb } from './db/index.js';
 import { getEncryptionKeyHex } from './lib/crypto.js';
 import { startHealthChecker } from './services/health.js';
 import { restoreLatestBackup, createBackup, startBackupScheduler } from './services/backup.js';
@@ -16,6 +16,7 @@ import { embeddingsRoute } from './routes/bun/embeddings.js';
 import { authRoute } from './routes/bun/auth.js';
 import { platformsRoute } from './routes/bun/platforms.js';
 import { premiumRoute } from './routes/bun/premium.js';
+import { conversationsRoute } from './routes/bun/conversations.js';
 import { authenticateRequest } from './lib/auth.js';
 import { serveStatic } from './lib/static.js';
 import { livezRoute, readyzRoute, providersRoute } from './routes/bun/status.js';
@@ -29,6 +30,7 @@ import {
   getOllamaEmulationMode,
 } from './routes/bun/ollama.js';
 import { urlTokenRoute } from './routes/bun/url-tokens.js';
+import { startCustomModelSync } from './services/custom-model-sync.js';
 import {
   mediaListRoute, mediaUsageRoute, mediaCustomRoute,
   mediaUpdateRoute, mediaDeleteRoute,
@@ -163,6 +165,13 @@ async function start() {
 
     if (pathname.startsWith('/api/premium')) {
       const res = await premiumRoute(req, url);
+      return addCors(req, res);
+    }
+
+    // Saved Playground transcripts (dashboard-session gated like every other
+    // admin route; the unified /v1 key does not open it).
+    if (pathname.startsWith('/api/conversations')) {
+      const res = await conversationsRoute(req, url);
       return addCors(req, res);
     }
 
@@ -342,6 +351,7 @@ async function start() {
   const scheduler = new NodeScheduler();
   startHealthChecker(scheduler);
   startBackupScheduler();
+  startCustomModelSync(getDb(), scheduler);
 }
 
 start().catch(console.error);

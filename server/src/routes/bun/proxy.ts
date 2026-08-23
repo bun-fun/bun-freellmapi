@@ -5,6 +5,8 @@ import {
 } from '../../services/router.js';
 import { recordRequest, recordTokens, setCooldown } from '../../services/ratelimit.js';
 import { getDb, getUnifiedApiKey } from '../../db/index.js';
+import { truncateMessagesForGithub } from '../../lib/content.js';
+import { isUpstreamClassificationOutput } from '../../lib/error-classify.js';
 import { z } from 'zod';
 
 // Sticky sessions
@@ -271,11 +273,17 @@ export async function proxyRoute(req: Request, _url: URL): Promise<Response> {
 
       recordRequest(route.platform, route.modelId, route.keyId);
 
+      // Same GitHub input ceiling as upstream: trim the dispatched copy so a
+      // long legacy prompt doesn't 413 the github hop.
+      const dispatchMessages = route.platform === 'github'
+        ? truncateMessagesForGithub(messages)
+        : messages;
+
       try {
         if (stream) {
           // Streaming
           const gen = route.provider.streamChatCompletion(
-            route.apiKey, messages, route.modelId,
+            route.apiKey, dispatchMessages, route.modelId,
             { temperature, max_tokens, top_p, tools, tool_choice, parallel_tool_calls },
           );
 
@@ -320,9 +328,19 @@ export async function proxyRoute(req: Request, _url: URL): Promise<Response> {
         } else {
           // Non-streaming
           const result = await route.provider.chatCompletion(
-            route.apiKey, messages, route.modelId,
+            route.apiKey, dispatchMessages, route.modelId,
             { temperature, max_tokens, top_p, tools, tool_choice, parallel_tool_calls },
           );
+          // #809: a bare "safe"/"unsafe" classification word from a relay is
+          // an upstream filter, not the requested model — fail over like an
+          // empty completion.
+          {
+            const only = contentToString(result.choices?.[0]?.message?.content ?? '');
+            if (isUpstreamClassificationOutput(only, route.platform)
+              && (result.choices?.[0]?.message?.tool_calls ?? []).length === 0) {
+              throw new Error(`empty completion from ${route.displayName} (upstream classification output)`);
+            }
+          }
           const totalTokens = result.usage?.total_tokens ?? 0;
           recordTokens(route.platform, route.modelId, route.keyId, totalTokens);
           recordSuccess(route.modelDbId);

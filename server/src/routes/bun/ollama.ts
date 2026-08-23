@@ -13,6 +13,7 @@ import { repairToolArguments, toolSchemaMap } from '../../lib/tool-args.js';
 import { routedViaValue } from '../../lib/header-value.js';
 import { logRequest } from '../../lib/request-log.js';
 import { sanitizeProviderErrorMessage } from '../../lib/error-redaction.js';
+import { isUpstreamClassificationOutput } from '../../lib/error-classify.js';
 import { buildModelListing } from '../../services/model-listing.js';
 import { runEmbeddings, EmbeddingsError } from '../../services/embeddings.js';
 
@@ -256,7 +257,10 @@ export async function ollamaChatRoute(req: Request): Promise<Response> {
         const text = contentToString(msg?.content ?? '');
         const reasoning = msg?.reasoning_content ?? '';
         let toolCalls = msg?.tool_calls ?? [];
-        if (!text && !reasoning && toolCalls.length === 0) throw new Error(`empty completion from ${route.displayName}`);
+        // #809: a bare "safe"/"unsafe" classification word from a relay is an
+        // upstream filter — fail over like an empty completion.
+        if ((!text && !reasoning && toolCalls.length === 0)
+          || (isUpstreamClassificationOutput(text, route.platform) && toolCalls.length === 0)) throw new Error(`empty completion from ${route.displayName}${isUpstreamClassificationOutput(text, route.platform) ? ' (upstream classification output)' : ''}`);
         for (const tc of toolCalls) tc.function.arguments = repairToolArguments(tc.function.arguments, toolSchemas.get(tc.function.name));
         const promptTokens = result.usage?.prompt_tokens ?? estimatedInputTokens;
         const completionTokens = result.usage?.completion_tokens ?? Math.ceil((text.length + reasoning.length) / 4);
@@ -347,7 +351,7 @@ export async function ollamaGenerateRoute(req: Request): Promise<Response> {
         const result = await route.provider.chatCompletion(route.apiKey, messages, route.modelId, opts);
         const text = contentToString(result.choices?.[0]?.message?.content ?? '');
         const reasoning = result.choices?.[0]?.message?.reasoning_content ?? '';
-        if (!text && !reasoning) throw new Error(`empty completion from ${route.displayName}`);
+        if ((!text && !reasoning) || isUpstreamClassificationOutput(text, route.platform)) throw new Error(`empty completion from ${route.displayName}${isUpstreamClassificationOutput(text, route.platform) ? ' (upstream classification output)' : ''}`);
         const promptTokens = result.usage?.prompt_tokens ?? estimatedInputTokens;
         const completionTokens = result.usage?.completion_tokens ?? Math.ceil(text.length / 4);
         recordTokens(route.platform, route.modelId, route.keyId, result.usage?.total_tokens ?? (promptTokens + completionTokens));

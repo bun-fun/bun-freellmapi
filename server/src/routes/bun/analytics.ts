@@ -1,5 +1,12 @@
 import { getDb } from '../../db/index.js';
 import { jsonResponse } from '../../lib/json.js';
+import { providerIdFor, providerDisplayName } from '../../lib/provider-identity.js';
+
+// The endpoint identity of a request, in SQL: the serving key's base_url, ''
+// when the key is gone or carries none (every catalog key). Mirrors
+// lib/endpoint-scope.normalizeBaseUrl so the SQL side agrees with the ids
+// providerIdFor() builds. Requires LEFT JOIN api_keys as `k`.
+const ENDPOINT_ID_SQL = "COALESCE(rtrim(trim(k.base_url), '/'), '')";
 
 function getTimeFilter(range: string): string {
   switch (range) {
@@ -166,25 +173,31 @@ export async function analyticsRoute(req: Request, url: URL): Promise<Response> 
     })));
   }
 
-  // By platform (new format matching upstream)
+  // By platform (new format matching upstream). Grouping key is
+  // (platform, endpoint): every custom relay shares platform 'custom', so
+  // grouping by platform alone collapses them into one row (#889).
   if (path === '/api/analytics/by-platform' && req.method === 'GET') {
     const db = getDb();
     const rows = db.prepare(`
       SELECT
-        platform,
+        r.platform,
+        ${ENDPOINT_ID_SQL} as base_url,
         COUNT(*) as requests,
-        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
-        AVG(latency_ms) as avg_latency_ms,
-        SUM(input_tokens) as total_input_tokens,
-        SUM(output_tokens) as total_output_tokens
-      FROM requests
-      WHERE created_at >= ${since}
-      GROUP BY platform
+        SUM(CASE WHEN r.status = 'success' THEN 1 ELSE 0 END) as success_count,
+        AVG(r.latency_ms) as avg_latency_ms,
+        SUM(r.input_tokens) as total_input_tokens,
+        SUM(r.output_tokens) as total_output_tokens
+      FROM requests r
+      LEFT JOIN api_keys k ON k.id = r.key_id
+      WHERE r.created_at >= ${since}
+      GROUP BY r.platform, ${ENDPOINT_ID_SQL}
       ORDER BY requests DESC
     `).all() as any[];
 
     return jsonResponse(rows.map(r => ({
       platform: r.platform,
+      providerId: providerIdFor(r.platform, r.base_url || null),
+      endpoint: providerDisplayName(r.platform, r.base_url || null),
       requests: r.requests,
       successRate: r.requests > 0 ? Math.round((r.success_count / r.requests) * 1000) / 10 : 0,
       avgLatencyMs: Math.round(r.avg_latency_ms ?? 0),
@@ -257,12 +270,17 @@ export async function analyticsRoute(req: Request, url: URL): Promise<Response> 
     })));
   }
 
-  // By model
+  // By model. Grouping key is (platform, endpoint, model_id) — the same model
+  // id served by two different custom relays is two different things (#889).
+  // The models join is endpoint-scoped: models is unique on
+  // (platform, model_id, endpoint_scope), so joining without endpoint_scope
+  // would multiply request rows by every relay that registered the model.
   if (path === '/api/analytics/by-model' && req.method === 'GET') {
     const db = getDb();
     const rows = db.prepare(`
       SELECT
         r.platform,
+        ${ENDPOINT_ID_SQL} as base_url,
         r.model_id,
         COALESCE(m.display_name, r.model_id) as display_name,
         COUNT(*) as requests,
@@ -271,15 +289,20 @@ export async function analyticsRoute(req: Request, url: URL): Promise<Response> 
         SUM(r.input_tokens) as total_input_tokens,
         SUM(r.output_tokens) as total_output_tokens
       FROM requests r
-      LEFT JOIN models m ON m.platform = r.platform AND m.model_id = r.model_id
+      LEFT JOIN api_keys k ON k.id = r.key_id
+      LEFT JOIN models m
+        ON m.platform = r.platform AND m.model_id = r.model_id
+       AND m.endpoint_scope = ${ENDPOINT_ID_SQL}
       WHERE r.created_at >= ${since}
-      GROUP BY r.platform, r.model_id
+      GROUP BY r.platform, ${ENDPOINT_ID_SQL}, r.model_id
       ORDER BY requests DESC
       LIMIT 50
     `).all() as any[];
 
     return jsonResponse(rows.map(r => ({
       platform: r.platform,
+      providerId: providerIdFor(r.platform, r.base_url || null),
+      endpoint: providerDisplayName(r.platform, r.base_url || null),
       modelId: r.model_id,
       displayName: r.display_name,
       requests: r.requests,

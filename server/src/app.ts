@@ -29,6 +29,7 @@ import { settingsRoute } from './routes/bun/settings.js';
 import { authRoute } from './routes/bun/auth.js';
 import { platformsRoute } from './routes/bun/platforms.js';
 import { premiumRoute } from './routes/bun/premium.js';
+import { conversationsRoute } from './routes/bun/conversations.js';
 import { authenticateRequest } from './lib/auth.js';
 import { livezRoute, readyzRoute, providersRoute } from './routes/bun/status.js';
 import { imagesRoute, speechRoute, transcriptionRoute } from './routes/bun/media-proxy.js';
@@ -116,6 +117,7 @@ class TestServer {
         if (pathname.startsWith('/api/settings')) return addCors(req, await settingsRoute(req, url));
         if (pathname === '/api/platforms') return addCors(req, await platformsRoute(req, url));
         if (pathname.startsWith('/api/premium')) return addCors(req, await premiumRoute(req, url));
+        if (pathname.startsWith('/api/conversations')) return addCors(req, await conversationsRoute(req, url));
 
         // Media dashboard
         if (pathname === '/api/media' && req.method === 'GET') return addCors(req, mediaListRoute());

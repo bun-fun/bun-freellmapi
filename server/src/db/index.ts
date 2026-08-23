@@ -300,6 +300,22 @@ function createTables(db: DatabaseType) {
 }
 
 function ensureSchemaCompat(db: DatabaseType) {
+  // Playground conversations (upstream migration 20260820_000001; the Bun
+  // baseline creates tables in-code, so mirror it here idempotently).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS playground_conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL DEFAULT '',
+      messages_json TEXT NOT NULL DEFAULT '[]',
+      model TEXT,
+      system_prompt TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_playground_conversations_updated
+      ON playground_conversations(updated_at_ms DESC);
+  `);
+
   // Legacy baseline columns
   ensureCol(db, 'models', 'supports_vision', 'INTEGER NOT NULL DEFAULT 0');
   ensureCol(db, 'models', 'supports_tools', 'INTEGER NOT NULL DEFAULT 0');

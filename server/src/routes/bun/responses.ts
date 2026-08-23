@@ -16,6 +16,7 @@ import { repairToolArguments, toolSchemaMap } from '../../lib/tool-args.js';
 import { routedViaValue } from '../../lib/header-value.js';
 import { logRequest } from '../../lib/request-log.js';
 import { sanitizeProviderErrorMessage } from '../../lib/error-redaction.js';
+import { isUpstreamClassificationOutput } from '../../lib/error-classify.js';
 import { z } from 'zod';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -188,6 +189,7 @@ function buildResponseObject(opts: {
   toolCalls: ChatToolCall[];
   promptTokens: number;
   completionTokens: number;
+  reasoningTokens?: number;
 }) {
   const output: any[] = [];
   if (opts.text.length > 0) {
@@ -222,7 +224,7 @@ function buildResponseObject(opts: {
       input_tokens: opts.promptTokens,
       input_tokens_details: { cached_tokens: 0 },
       output_tokens: opts.completionTokens,
-      output_tokens_details: { reasoning_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: opts.reasoningTokens ?? 0 },
       total_tokens: opts.promptTokens + opts.completionTokens,
     },
   };
@@ -541,13 +543,20 @@ export async function responsesRoute(req: Request, _url: URL): Promise<Response>
           },
         }));
 
-        // Empty completion → fail over
-        if (!text && toolCalls.length === 0) {
-          throw new Error(`empty completion from ${route.displayName}`);
+        // Empty completion → fail over. #809: a bare "safe"/"unsafe"
+        // classification word from a relay is an upstream filter, not the
+        // requested model — fail over like an empty completion.
+        if ((!text && toolCalls.length === 0)
+          || (isUpstreamClassificationOutput(text, route.platform) && toolCalls.length === 0)) {
+          throw new Error(`empty completion from ${route.displayName}${isUpstreamClassificationOutput(text, route.platform) ? ' (upstream classification output)' : ''}`);
         }
 
         const promptTokens = result.usage?.prompt_tokens ?? estimatedInputTokens;
         const completionTokens = result.usage?.completion_tokens ?? Math.ceil(text.length / 4);
+        // #764: report reasoning_tokens truthfully — the provider's own count
+        // when advertised, else the same chars/4 estimate of the thinking text.
+        const reasoningTokens = result.usage?.completion_tokens_details?.reasoning_tokens
+          ?? Math.ceil(((msg as any)?.reasoning ?? '').length / 4);
 
         recordTokens(route.platform, route.modelId, route.keyId, result.usage?.total_tokens ?? (promptTokens + completionTokens));
         recordSuccess(route.modelDbId);
@@ -559,7 +568,7 @@ export async function responsesRoute(req: Request, _url: URL): Promise<Response>
 
         const responseObject = buildResponseObject({
           id: responseId, model: route.modelId, text, toolCalls,
-          promptTokens, completionTokens,
+          promptTokens, completionTokens, reasoningTokens,
         });
 
         return new Response(JSON.stringify(responseObject), {

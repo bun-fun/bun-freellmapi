@@ -1,5 +1,8 @@
 import { getUnifiedApiKey, regenerateUnifiedKey, getDb } from '../../db/index.js';
 import { jsonResponse, errorResponse } from '../../lib/json.js';
+import { probeProxyUrl, DEFAULT_PROXY_PROBE_TARGET, getProxyBypassPlatforms } from '../../lib/proxy.js';
+import { getProvider } from '../../providers/index.js';
+import type { Platform } from '@freellmapi/shared/types.js';
 import { z } from 'zod';
 import { getAppVersion } from '../../lib/app-version.js';
 import {
@@ -17,6 +20,37 @@ import {
 } from '../../services/fusion.js';
 import { getClaudeModelMap, setClaudeModelMap } from '../../services/anthropic-map.js';
 import { getCompressionStats } from '../../services/compression/stats.js';
+
+/**
+ * What the proxy probe should call: the /models endpoint of a provider the
+ * operator actually holds an enabled key for, preferring one that is not
+ * bypassing the proxy. PROXY_TEST_URL overrides everything.
+ */
+function proxyProbeTarget(): string {
+  const override = (process.env.PROXY_TEST_URL ?? '').trim();
+  if (override) return override;
+
+  let platforms: { platform: string }[] = [];
+  try {
+    platforms = getDb().prepare(
+      `SELECT DISTINCT platform FROM api_keys WHERE enabled = 1 ORDER BY platform`,
+    ).all() as { platform: string }[];
+  } catch {
+    return DEFAULT_PROXY_PROBE_TARGET;
+  }
+
+  const bypassed = new Set(getProxyBypassPlatforms());
+  const candidates = [
+    ...platforms.filter(row => !bypassed.has(row.platform)),
+    ...platforms.filter(row => bypassed.has(row.platform)),
+  ];
+  for (const row of candidates) {
+    if (row.platform === 'custom') continue;
+    const url = (getProvider(row.platform as Platform) as { modelsUrl?: string } | undefined)?.modelsUrl;
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) return url;
+  }
+  return DEFAULT_PROXY_PROBE_TARGET;
+}
 
 export async function settingsRoute(req: Request, _url: URL): Promise<Response> {
   const path = new URL(req.url).pathname;
@@ -44,6 +78,15 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
     const settings: Record<string, any> = {};
     for (const r of rows) settings[r.key] = r.value;
     return jsonResponse(settings);
+  }
+
+  // Test proxy connectivity WITHOUT saving (#863). The dashboard's "Test"
+  // button sends the DRAFT value; an empty body falls back to the saved proxy
+  // URL. The probe never persists anything.
+  if (path === '/api/settings/proxy/test' && req.method === 'POST') {
+    let body: { proxyUrl?: string } = {};
+    try { body = await req.json(); } catch { /* empty body → probe the saved URL */ }
+    return jsonResponse(await probeProxyUrl(body?.proxyUrl, { targetUrl: proxyProbeTarget() }));
   }
 
   // Compression stats

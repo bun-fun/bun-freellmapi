@@ -16,6 +16,7 @@ import { repairToolArguments, toolSchemaMap } from '../../lib/tool-args.js';
 import { routedViaValue } from '../../lib/header-value.js';
 import { logRequest } from '../../lib/request-log.js';
 import { sanitizeProviderErrorMessage } from '../../lib/error-redaction.js';
+import { isUpstreamClassificationOutput } from '../../lib/error-classify.js';
 import { resolveAnthropicModel } from '../../services/anthropic-map.js';
 import { z } from 'zod';
 import type { ReasoningEffort } from '../../lib/sampling-params.js';
@@ -691,9 +692,12 @@ async function dispatchNonStreaming(
   const respText = contentToString(respMsg?.content ?? '');
   let respToolCalls = respMsg?.tool_calls ?? [];
 
-  // Empty completion → fail over
-  if (!respText && respToolCalls.length === 0) {
-    throw new Error(`empty completion from ${route.displayName}`);
+  // Empty completion → fail over. #809: a bare "safe"/"unsafe" classification
+  // word from a relay is an upstream filter, not the requested model — fail
+  // over like an empty completion.
+  if ((!respText && respToolCalls.length === 0)
+    || (isUpstreamClassificationOutput(respText, route.platform) && respToolCalls.length === 0)) {
+    throw new Error(`empty completion from ${route.displayName}${isUpstreamClassificationOutput(respText, route.platform) ? ' (upstream classification output)' : ''}`);
   }
 
   // Repair double-encoded tool arguments

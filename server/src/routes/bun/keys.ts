@@ -18,12 +18,13 @@ function verifyDashboardPassword(password: string, storedHash: string, salt: str
 }
 
 const PLATFORMS = [
-  'google', 'groq', 'cerebras', 'sambanova', 'nvidia', 'mistral',
+  'google', 'groq', 'cerebras', 'sambanova', 'bai', 'nvidia', 'mistral',
   'openrouter', 'github', 'cohere', 'cloudflare', 'zhipu',
   'ollama', 'kilo', 'pollinations', 'llm7', 'huggingface',
   'opencode', 'ovh', 'agnes', 'reka', 'siliconflow',
   'routeway', 'bazaarlink', 'ainative', 'aion', 'requesty',
-  'navy', 'nara', 'sealion', 'modelscope', 'aihorde',
+  'navy', 'nara', 'sealion', 'anyapi', 'orcarouter', 'modelscope',
+  'qianfan', 'volcengine', 'longcat', 'xfyun', 'aihorde',
   'custom',
 ] as const;
 

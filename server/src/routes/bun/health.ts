@@ -1,6 +1,7 @@
 import { getDb } from '../../db/index.js';
 import { checkKeyHealth, checkAllKeys } from '../../services/health.js';
 import { hasProvider } from '../../providers/index.js';
+import { getDegradationStatus } from '../../services/degradation.js';
 import { jsonResponse } from '../../lib/json.js';
 
 export async function healthRoute(req: Request, _url: URL): Promise<Response> {
@@ -31,6 +32,7 @@ export async function healthRoute(req: Request, _url: URL): Promise<Response> {
     `).all() as any[];
 
     return jsonResponse({
+      degradation: getDegradationStatus(),
       platforms: platforms.map(p => ({
         platform: p.platform,
         hasProvider: hasProvider(p.platform),

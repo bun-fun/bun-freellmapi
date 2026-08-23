@@ -13,6 +13,7 @@ import { repairToolArguments, toolSchemaMap } from '../../lib/tool-args.js';
 import { routedViaValue } from '../../lib/header-value.js';
 import { logRequest } from '../../lib/request-log.js';
 import { sanitizeProviderErrorMessage } from '../../lib/error-redaction.js';
+import { isUpstreamClassificationOutput } from '../../lib/error-classify.js';
 import {
   geminiContentsToMessages, geminiToolsToChatTools, geminiToolChoice,
   geminiResponseFormat, geminiFinishReason, geminiPartsFromResult,
@@ -318,8 +319,12 @@ export async function geminiGenerateRoute(req: Request, model: string, stream: b
         const reasoning = msg?.reasoning_content ?? '';
         let toolCalls = msg?.tool_calls ?? [];
 
-        if (!text && !reasoning && toolCalls.length === 0) {
-          throw new Error(`empty completion from ${route.displayName}`);
+        // #809: a bare "safe"/"unsafe" classification word from a relay is an
+        // upstream filter, not the requested model — fail over like an empty
+        // completion.
+        if ((!text && !reasoning && toolCalls.length === 0)
+          || (isUpstreamClassificationOutput(text, route.platform) && toolCalls.length === 0)) {
+          throw new Error(`empty completion from ${route.displayName}${isUpstreamClassificationOutput(text, route.platform) ? ' (upstream classification output)' : ''}`);
         }
 
         for (const tc of toolCalls) {
