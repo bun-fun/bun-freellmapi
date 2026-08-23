@@ -104,3 +104,39 @@ export function resolveAnthropicModel(model?: string): ResolvedAnthropicModel {
   const id = lookupEnabled((model ?? '').trim());
   return id != null ? { preferredModelDbId: id, pinned: true } : { pinned: false };
 }
+
+// The canonical Claude id this gateway answers to for each family, and the
+// label discovery shows for it.
+//
+// These are NOT real Claude cloud models and are not presented as such: every
+// one of them is already accepted by `/v1/messages`, where classifyClaudeFamily
+// maps it onto the free pool through the operator's family map. They are listed
+// in `GET /v1/models` because some Anthropic clients only accept ids that look
+// like Claude models and reject a catalog of free-model ids outright. Claude
+// Desktop's third-party gateway picker is the reported case (#880): it fetched
+// the full catalog over HTTP 200 and still reported "found 0 models", because
+// nothing in it belonged to a Claude family.
+//
+// Listing them is honest in the sense that matters for discovery: these are ids
+// the gateway really will serve. The display name says where the request
+// actually goes so nobody reads the entry as hosted Claude.
+export const CLAUDE_FAMILY_ALIASES: { id: string; family: ClaudeFamily; label: string }[] = [
+  { id: 'claude-opus-4-5', family: 'opus', label: 'Opus' },
+  { id: 'claude-sonnet-4-5', family: 'sonnet', label: 'Sonnet' },
+  { id: 'claude-haiku-4-5', family: 'haiku', label: 'Haiku' },
+];
+
+// Discovery entries for the family aliases, named after where each one routes:
+// the pinned catalog model when the operator pinned one, otherwise the router.
+export function claudeFamilyDiscoveryEntries(): { id: string; displayName: string }[] {
+  const map = getClaudeModelMap();
+  return CLAUDE_FAMILY_ALIASES.map(({ id, family, label }) => {
+    const target = map[family];
+    return {
+      id,
+      displayName: !target || target === 'auto'
+        ? `${label} slot (auto-routed to a free model)`
+        : `${label} slot (routed to ${target})`,
+    };
+  });
+}

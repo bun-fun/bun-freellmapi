@@ -6,7 +6,8 @@ import { initDb, getDb, getUnifiedApiKey } from '../../db/index.js';
 let app: Express;
 
 async function rpc(message: unknown, opts: { auth?: boolean } = {}) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const addr = server.address() as { port: number };
   const res = await fetch(`http://127.0.0.1:${addr.port}/mcp`, {
     method: 'POST',
@@ -191,7 +192,8 @@ describe('MCP server (/mcp, stateless Streamable HTTP)', () => {
   });
 
   it('GET /mcp is 405 (stateless: no server-initiated stream)', async () => {
-    const server = app.listen(0);
+    const server = app.listen(0, '127.0.0.1');
+    if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
     const addr = server.address() as { port: number };
     const res = await fetch(`http://127.0.0.1:${addr.port}/mcp`);
     server.close();

@@ -116,7 +116,10 @@ describe('per-key bandit selection', () => {
     addKeyHistory('groq', 'm', seasoned, { successes: 40, failures: 2 });
     refreshStatsCache(getDb(), true);
 
-    const counts = pickKeyCounts(300);
+    // Thompson sampling gives an unmeasured key a small but non-zero chance of
+    // winning each draw (~1.5% with this prior), so 300 draws flaked in CI when
+    // the fresh key lost every one. 3000 draws make that ~1e-20 instead.
+    const counts = pickKeyCounts(3000);
     expect(counts[fresh] ?? 0).toBeGreaterThan(0);
     expect(counts[seasoned] ?? 0).toBeGreaterThan(0);
   });

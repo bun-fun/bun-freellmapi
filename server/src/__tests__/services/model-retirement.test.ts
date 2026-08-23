@@ -81,6 +81,36 @@ describe('modelRetirementSignal (conservative end-of-life detection — #634)', 
     ))).toBe('definitive');
   });
 
+  // 'definitive' skips the corroboration gate and disables the model on ONE
+  // response, so the phrase must not be load-bearing by itself: a rate-limit
+  // or server-error body can quote a retirement notice (about this model or
+  // another) without the model being gone.
+  it('ignores an end-of-life phrase when the status does not agree the model is gone', () => {
+    expect(modelRetirementSignal(Object.assign(
+      new Error('Rate limit exceeded. Note: llama-3.1-8b reaches end of life on 2026-12-01'),
+      { status: 429 },
+    ))).toBeNull();
+    expect(modelRetirementSignal(Object.assign(
+      new Error('Internal server error: upstream pool has been decommissioned'),
+      { status: 500 },
+    ))).toBeNull();
+    expect(modelRetirementSignal(Object.assign(
+      new Error('Bad request: the v1 endpoint has been sunset, use v2'),
+      { status: 400 },
+    ))).toBeNull();
+  });
+
+  it('still fires when a gone-shaped status carries the phrase', () => {
+    expect(modelRetirementSignal(Object.assign(
+      new Error('API error 410: this model has been retired'),
+      { status: 410 },
+    ))).toBe('definitive');
+    expect(modelRetirementSignal(Object.assign(
+      new Error('API error 404: this model has been decommissioned'),
+      { status: 404 },
+    ))).toBe('definitive');
+  });
+
   it('treats a 404 that clearly says the model is gone as probable (needs corroboration)', () => {
     expect(modelRetirementSignal(Object.assign(
       new Error('OpenRouter API error 404: this model is no longer available'),

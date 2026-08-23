@@ -267,7 +267,7 @@ export function GroupHeaderCells({ group, rank, dragHandle, onToggleGroup, allRo
   const measured = group.members.filter(m => (m.totalRequests ?? 0) > 0)
   const scoreBreakdown = group.members
     .map(m => `${memberProviderLabel(m, siblings)} ${m.score !== undefined ? m.score.toFixed(3) : '–'}`)
-    .join(' · ')
+    .join('\n')
   const vision = group.members.some(m => m.supportsVision)
   const tools = group.members.some(m => m.supportsTools)
   const quota = groupQuotaBadge(group.members, t)
@@ -287,7 +287,7 @@ export function GroupHeaderCells({ group, rank, dragHandle, onToggleGroup, allRo
             <span className="font-medium text-sm">{group.label}</span>
             {solo
               ? <span className="text-xs text-muted-foreground" title={memberEndpointTitle(group.members[0], siblings)}>{memberProviderLabel(group.members[0], siblings)}</span>
-              : <Tooltip text={t('models.servedBy', { providers: group.members.map(m => memberProviderLabel(m, siblings)).join(', ') })}>
+              : <Tooltip text={t('models.servedBy', { providers: group.members.map(m => memberProviderLabel(m, siblings)).join('\n') })}>
                   <span className="text-[10px] rounded-full px-1.5 py-0.5 bg-muted text-muted-foreground">{t('models.providerCount', { count: group.members.length })}</span>
                 </Tooltip>}
             {quota && (

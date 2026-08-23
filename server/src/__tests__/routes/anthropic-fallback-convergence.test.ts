@@ -37,7 +37,8 @@ function streamProvider(gen: () => AsyncGenerator<any>) {
 }
 
 async function post(app: Express, body: any, key: string) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const addr = server.address() as any;
   const res = await fetch(`http://127.0.0.1:${addr.port}/v1/messages`, {
     method: 'POST',

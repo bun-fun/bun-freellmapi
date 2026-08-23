@@ -70,6 +70,17 @@ docker compose up -d
 >
 > 只在你信任的网络里这么做：这个代理是单用户的，唯一的防护就是那把统一 API 密钥。
 
+> **宿主机连得上提供方，容器里却连不上？** 容器有自己独立的网络栈，所以有两件在你机器上成立的事，到了容器里并不成立：
+>
+> - **`127.0.0.1` 在容器里指的是容器自己，不是你的机器。** 如果你是通过宿主机上的代理客户端（Clash、v2rayN、sing-box，或公司代理）访问提供方，请把 FreeLLMAPI 指向宿主机：`PROXY_URL=socks5h://host.docker.internal:7890`。仓库自带的 `docker-compose.yml` 已经把 `host.docker.internal` 映射到宿主网关，所以在 Linux 上的原生 Docker 里同样可用，不只是 Docker Desktop。另外代理本身也要允许来自 loopback 以外的连接（Clash 里是 `allow-lan: true`）。
+> - **纯 IPv6 的宿主机需要在 Docker 里开启 IPv6。** 默认的 bridge 网络只有 IPv4，所以在没有 IPv4 出口的宿主机上，容器什么都连不上，连 DNS 也一样。在 `/etc/docker/daemon.json` 里加上 `"ipv6": true`、`"ip6tables": true` 和一个 `"fixed-cidr-v6"` 网段，然后重启 Docker。
+>
+> 想知道自己属于哪一种，直接问容器：
+>
+> ```bash
+> docker compose exec freellmapi node -e "fetch('https://generativelanguage.googleapis.com/').then(r=>console.log('ok',r.status)).catch(e=>console.log('fail',e.cause?.code||e.message))"
+> ```
+
 ## 本地开发
 
 **前置条件：** Node.js 20+、npm。
@@ -169,6 +180,8 @@ docker compose logs -f freellmapi
 ```
 
 容器端口默认绑定在 `127.0.0.1`（仅本机）。想从网络里的另一台机器访问仪表盘或 API，用 `HOST_BIND=0.0.0.0 docker compose up -d` 把它发布到所有网卡上。只在可信的局域网里这么做，因为这个代理是单用户的。
+
+用局域网地址走纯 HTTP 是可以直接工作的：那些只对 HTTPS 生效的安全响应头（`upgrade-insecure-requests`、`Cross-Origin-Opener-Policy`、`Origin-Agent-Cluster`）只有在请求确实经由 TLS 到达时才会发出，或者是在 loopback 上，因为浏览器本来就把 loopback 当作安全上下文。放在 HTTPS 反向代理后面时它们会自动恢复，只要代理转发了 `X-Forwarded-Proto`。如果你的部署有特殊需要，`CSP_UPGRADE_INSECURE_REQUESTS=true|false` 可以强制开关那条升级指令。
 
 SQLite 数据存放在 `freellmapi-data` 卷的 `/app/server/data` 下。升级时请保持 `.env` 里的 `ENCRYPTION_KEY` 和这个卷不变，因为提供方密钥是加密存储的。如果你的宿主机只持久化某个特定目录，可以设置 `FREEAPI_DB_PATH=/that/path/freellmapi.db`。
 

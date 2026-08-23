@@ -192,6 +192,18 @@ function provisionalProviderTokens(platform: string, keyId: number, now: number)
   return total;
 }
 
+// Retention sweep for rate_limit_usage. The only index on the table is
+// idx_rate_limit_usage_lookup(platform, model_id, key_id, kind, created_at_ms),
+// which a bare `created_at_ms <= ?` predicate cannot use — the prune is a full
+// table scan. Running it inside every insert put that scan on the hot request
+// path, so it is throttled: rows are kept for a DAY and every counter query is
+// bounded by its own `created_at_ms > ?` filter, so letting expired rows linger
+// for up to a minute costs nothing but a few stale rows.
+const USAGE_PRUNE_INTERVAL_MS = MINUTE;
+let lastUsagePruneMs = 0;
+
+/** True when the row actually reached the DB. Callers use this to decide
+ *  whether the in-memory windows have to carry the count instead. */
 function recordUsage(
   platform: string,
   modelId: string,
@@ -199,14 +211,21 @@ function recordUsage(
   kind: UsageKind,
   tokens: number,
   now: number,
-) {
-  withDb(db => {
+): boolean {
+  return withDb(db => {
     db.prepare(`
       INSERT INTO rate_limit_usage (platform, model_id, key_id, kind, tokens, created_at_ms)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(platform, modelId, keyId, kind, tokens, now);
-    db.prepare('DELETE FROM rate_limit_usage WHERE created_at_ms <= ?').run(now - DAY);
-  });
+    // `now < lastUsagePruneMs` covers a clock step backwards (NTP correction,
+    // a suspended host resuming) — without it a jump forward would wedge the
+    // prune off until real time caught up again.
+    if (now - lastUsagePruneMs >= USAGE_PRUNE_INTERVAL_MS || now < lastUsagePruneMs) {
+      lastUsagePruneMs = now;
+      db.prepare('DELETE FROM rate_limit_usage WHERE created_at_ms <= ?').run(now - DAY);
+    }
+    return true;
+  }) ?? false;
 }
 
 function countPersistedRequests(
@@ -572,16 +591,38 @@ export function canUseProviderTokens(
   return used + providerBilledTokens(platform, modelId, estimatedTokens) <= cap;
 }
 
+// ── Degraded-mode memory windows ─────────────────────────────────────────────
+// The in-memory windows are a FALLBACK for the persisted counters: requestCount
+// / tokenCount / providerDailyRequestCount all prefer the DB and only consult
+// memory when the DB refuses to answer. So on a healthy server nothing ever
+// reads these arrays — and pruning happens only on the read path, which means
+// nothing ever trimmed them either: every recorded request leaked one timestamp
+// (and one {ts, tokens} object) for the lifetime of the process.
+//
+// Record in memory only when the persisted write actually failed, and prune the
+// window as we push so a long DB outage cannot grow it past its own width
+// either. Degraded-mode behavior is unchanged: the same timestamps land in the
+// same windows whenever the DB is the one that could not record them.
+function pushMemoryRequest(key: string, windowMs: number, now: number) {
+  const w = getWindow(key);
+  w.timestamps = pruneTimestamps(w.timestamps, windowMs, now);
+  w.timestamps.push(now);
+}
+
+function pushMemoryTokens(key: string, windowMs: number, now: number, tokens: number) {
+  const w = getWindow(key);
+  w.tokenTimestamps = w.tokenTimestamps.filter(t => t.ts > now - windowMs);
+  w.tokenTimestamps.push({ ts: now, tokens });
+}
+
 export function recordRequest(platform: string, modelId: string, keyId: number) {
   const now = Date.now();
 
-  const rpmKey = `${platform}:${modelId}:${keyId}:rpm`;
-  getWindow(rpmKey).timestamps.push(now);
+  if (!recordUsage(platform, modelId, keyId, 'request', 0, now)) {
+    pushMemoryRequest(`${platform}:${modelId}:${keyId}:rpm`, MINUTE, now);
+    pushMemoryRequest(`${platform}:${modelId}:${keyId}:rpd`, DAY, now);
+  }
 
-  const rpdKey = `${platform}:${modelId}:${keyId}:rpd`;
-  getWindow(rpdKey).timestamps.push(now);
-
-  recordUsage(platform, modelId, keyId, 'request', 0, now);
   clearNullLimitHits(platform, modelId, keyId);
   clearCooldownHits(platform, modelId, keyId);
 }
@@ -594,13 +635,10 @@ export function recordTokens(
 ) {
   const now = Date.now();
 
-  const tpmKey = `${platform}:${modelId}:${keyId}:tpm`;
-  getWindow(tpmKey).tokenTimestamps.push({ ts: now, tokens });
-
-  const tpdKey = `${platform}:${modelId}:${keyId}:tpd`;
-  getWindow(tpdKey).tokenTimestamps.push({ ts: now, tokens });
-
-  recordUsage(platform, modelId, keyId, 'tokens', tokens, now);
+  if (!recordUsage(platform, modelId, keyId, 'tokens', tokens, now)) {
+    pushMemoryTokens(`${platform}:${modelId}:${keyId}:tpm`, MINUTE, now, tokens);
+    pushMemoryTokens(`${platform}:${modelId}:${keyId}:tpd`, DAY, now, tokens);
+  }
 }
 
 // Cooldown: when a provider returns 429, block that model+key for a period
@@ -659,6 +697,17 @@ function clearCooldownHits(platform: string, modelId: string, keyId: number): vo
 // Short cooldown for a transient (per-minute) 429 — recovers within ~one window.
 const TRANSIENT_COOLDOWN_MS = 90 * 1000;
 
+// Ceiling for the null-limits escalation path. A provider that publishes no
+// RPD/TPD gives us no counter to check, so "daily-exhausted" there is inferred
+// from repeated 429s alone — and per-minute jitter under load looks exactly the
+// same as a spent daily quota. Letting that guess climb the full ladder means a
+// short burst of RPM 429s can quarantine a model+key for 24h with nothing able
+// to contradict it (a benched route serves no request, so no success arrives to
+// clear the counter). Cap the guess at the ladder's 10-minute step; a genuinely
+// dead route just re-benches every 10 minutes instead of hammering the 90s loop.
+// Real RPD/TPD exhaustion is measured, not guessed, and keeps the full ladder.
+const UNKNOWN_LIMIT_MAX_COOLDOWN_MS = 10 * MINUTE;
+
 // Long cooldown for a 402 Payment Required (provider/key out of credits). Unlike
 // a 429, this won't clear on the next minute/day window — it needs a top-up or
 // billing reset. Bench the model+key for a full day so the router fails over to
@@ -678,8 +727,9 @@ export const MODEL_FORBIDDEN_COOLDOWN_MS = DAY;
 // not yet seeded — common for ollama, cloudflare, nvidia, huggingface, mistral,
 // kilo, llm7, pollinations), we cannot check a counter against a cap. Fall back
 // to a hit-count heuristic: after 2+ 429s within this rolling window, treat as
-// "effectively daily-exhausted" and enter the standard escalation ladder at
-// the same step the documented-RPD path would. Without this, these providers
+// "effectively daily-exhausted" and escalate — but only as far as
+// UNKNOWN_LIMIT_MAX_COOLDOWN_MS, since the verdict is a guess. Without this,
+// these providers
 // stay stuck at TRANSIENT_COOLDOWN_MS forever even when every request is a
 // 429 (observed in production: ollama 130× 429s in 1h with all 90s cooldowns
 // expired before the next request). Cheaper than waiting for the operator to
@@ -841,9 +891,16 @@ export function getCooldownDecisionForLimit(
     heuristicallyExhausted =
       recentHitCount(platform, modelId, keyId, now) >= NULL_LIMIT_HIT_THRESHOLD;
   }
-  const base = (rpdExhausted || tpdExhausted || heuristicallyExhausted)
-    ? getNextCooldownDuration(platform, modelId, keyId)
-    : TRANSIENT_COOLDOWN_MS;
+  const dailyExhausted = rpdExhausted || tpdExhausted;
+  let base = TRANSIENT_COOLDOWN_MS;
+  if (dailyExhausted || heuristicallyExhausted) {
+    // The ladder step is taken either way, so a route whose real limits get
+    // seeded (or learned) later resumes escalating where it left off rather
+    // than restarting at 2 minutes.
+    base = getNextCooldownDuration(platform, modelId, keyId);
+    // Guessed exhaustion (no published RPD/TPD) never benches past the cap.
+    if (!dailyExhausted) base = Math.min(base, UNKNOWN_LIMIT_MAX_COOLDOWN_MS);
+  }
   // Honor an upstream Retry-After as a floor: never bench shorter than our own
   // heuristic, but extend (capped at a day) when the provider explicitly asks
   // to wait longer than we otherwise would.
@@ -899,6 +956,29 @@ function clearPersistedCooldown(platform: string, modelId: string, keyId: number
          AND key_id = ?
     `).run(platform, modelId, keyId);
   });
+}
+
+/**
+ * Delete every already-expired cooldown, on disk and in memory, and return how
+ * many rows went. Expiry is otherwise purely lazy: isOnCooldown drops a row only
+ * when something asks about that exact (platform, model, key), so a row whose
+ * model was retired, whose key was deleted, or that simply outlived a process
+ * that had every route benched is never collected — the table only grows, and
+ * every cooldown query (status rollups, the probe scan, penalty inspector) pays
+ * for the dead rows. Called once at boot (index.ts) so a restart starts clean.
+ */
+export function cleanupExpiredCooldowns(now = Date.now()): number {
+  const cleared = withDb(db => {
+    const result = db.prepare('DELETE FROM rate_limit_cooldowns WHERE expires_at_ms <= ?').run(now);
+    return Number(result.changes ?? 0);
+  }) ?? 0;
+
+  // Only the expired entries: this is a sweep, not clearCooldownsForKey — an
+  // active bench must survive it.
+  for (const [key, expiry] of [...cooldowns]) {
+    if (expiry <= now) cooldowns.delete(key);
+  }
+  return cleared;
 }
 
 export function setCooldown(

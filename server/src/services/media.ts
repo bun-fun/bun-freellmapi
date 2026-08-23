@@ -328,11 +328,32 @@ async function callImageProvider(
     }
     case 'nvidia': {
       // NVIDIA NIM image models live at ai.api.nvidia.com/v1/genai/{model};
-      // response is { artifacts: [{ base64 }] }.
+      // response is { artifacts: [{ base64 }] }. The hosted FLUX deployments
+      // do not share one request schema: FLUX.1 Dev rejects the four-step
+      // defaults used by Schnell, while FLUX.2 Klein rejects `mode` and
+      // guidance fields entirely.
+      let body: Record<string, unknown>;
+      switch (row.model_id) {
+        case 'black-forest-labs/flux.1-dev':
+          body = {
+            prompt: p.prompt,
+            mode: 'base',
+            steps: 28,
+            width: 1024,
+            height: 1024,
+            cfg_scale: 3.5,
+          };
+          break;
+        case 'black-forest-labs/flux.2-klein-4b':
+          body = { prompt: p.prompt, steps: 4, width: 1024, height: 1024 };
+          break;
+        default:
+          body = { prompt: p.prompt, mode: 'base', steps: 4, width: w, height: h };
+      }
       const r = await mediaFetch(`https://ai.api.nvidia.com/v1/genai/${row.model_id}`, 'nvidia', 'image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ prompt: p.prompt, mode: 'base', steps: 4, width: w, height: h }),
+        body: JSON.stringify(body),
       });
       const j = (await r.json()) as { artifacts?: { base64?: string }[] };
       return (j.artifacts ?? []).map(a => ({ b64_json: a.base64 }));
@@ -359,10 +380,15 @@ async function callImageProvider(
         form.append('height', String(h));
         init = { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form };
       } else {
+        // Cloudflare's FLUX.1 Schnell schema is prompt-only; dimensions that
+        // the other JSON image models accept are rejected as extra fields.
+        const body = row.model_id === '@cf/black-forest-labs/flux-1-schnell'
+          ? { prompt: p.prompt }
+          : { prompt: p.prompt, width: w, height: h };
         init = {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ prompt: p.prompt, width: w, height: h }),
+          body: JSON.stringify(body),
         };
       }
       const r = await mediaFetch(url, 'cloudflare', 'image', init);

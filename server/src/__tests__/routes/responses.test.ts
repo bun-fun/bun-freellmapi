@@ -18,7 +18,8 @@ function fakeRoute(provider: any) {
 }
 
 async function post(app: Express, path: string, body: any, key?: string, headers: Record<string, string> = {}) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const addr = server.address() as any;
   const res = await fetch(`http://127.0.0.1:${addr.port}${path}`, {
     method: 'POST',
@@ -50,9 +51,23 @@ describe('POST /v1/responses (#96)', () => {
     expect((await post(app, '/v1/responses', { model: 'auto' }, key)).status).toBe(400);
   });
 
-  // #118: image input isn't carried through the Responses translation yet, so
-  // it must hard-fail clearly rather than silently answer blind to the image.
-  it('rejects image input with a clear 422 pointing at /v1/chat/completions', async () => {
+  // #118: image parts now translate to image_url content blocks, so an image
+  // request must be routed with requireVision=true (only vision-capable models
+  // are candidates; a text-only pinned model is skipped, falling back to a
+  // vision-capable peer). The old unconditional 422 is gone.
+  it('routes an image request through requireVision (vision-capable model)', async () => {
+    mockRouteRequest.mockClear();
+    mockRouteRequest.mockReturnValue(fakeRoute({
+      async chatCompletion() {
+        return {
+          id: 'c', object: 'chat.completion', created: 0, model: 'fake-model',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'a red circle' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        };
+      },
+      async *streamChatCompletion() { /* unused */ },
+    }));
+
     const { status, text } = await post(app, '/v1/responses', {
       input: [{
         role: 'user',
@@ -62,14 +77,72 @@ describe('POST /v1/responses (#96)', () => {
         ],
       }],
     }, key);
+    expect(status).toBe(200);
+    expect(JSON.parse(text).output_text).toBe('a red circle');
+    // routeRequest arg [3] is requireVision.
+    expect(mockRouteRequest.mock.calls.at(-1)?.[3]).toBe(true);
+  });
+
+  it('rejects a file_id-only input_image with 422 before routing (no Files backend)', async () => {
+    mockRouteRequest.mockClear();
+    const { status, text } = await post(app, '/v1/responses', {
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'what is this?' },
+          { type: 'input_image', file_id: 'file_abc123' },
+        ],
+      }],
+    }, key);
     expect(status).toBe(422);
-    expect(JSON.parse(text).error.code).toBe('no_vision_model');
+    const body = JSON.parse(text);
+    expect(body.error.code).toBe('unsupported_image_input');
+    expect(body.error.type).toBe('invalid_request_error');
+    expect(mockRouteRequest).not.toHaveBeenCalled();
+  });
+
+  it('rejects an input_image with no resolvable url instead of answering blind', async () => {
+    mockRouteRequest.mockClear();
+    // The lenient schema accepts this body; without the pre-check the image
+    // part would translate to nothing and the request would route as plain
+    // text — answering blind to an image the client believes was sent.
+    const { status, text } = await post(app, '/v1/responses', {
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'what is this?' },
+          { type: 'input_image', detail: 'high' },
+        ],
+      }],
+    }, key);
+    expect(status).toBe(422);
+    expect(JSON.parse(text).error.code).toBe('unsupported_image_input');
+    expect(mockRouteRequest).not.toHaveBeenCalled();
+  });
+
+  it('rejects an image request with 422 no_vision_model when no vision model is enabled', async () => {
+    mockRouteRequest.mockClear();
+    getDb().prepare('UPDATE models SET enabled = 0 WHERE supports_vision = 1').run();
+    try {
+      const { status, text } = await post(app, '/v1/responses', {
+        input: [{
+          role: 'user',
+          content: [{ type: 'input_image', image_url: 'data:image/png;base64,iVBORw0KGgo=' }],
+        }],
+      }, key);
+      expect(status).toBe(422);
+      expect(JSON.parse(text).error.code).toBe('no_vision_model');
+      expect(mockRouteRequest).not.toHaveBeenCalled();
+    } finally {
+      getDb().prepare('UPDATE models SET enabled = 1 WHERE supports_vision = 1').run();
+    }
   });
 
   // #103: the x-api-key header (Anthropic wire format) must authenticate here
   // too, not just on /v1/chat/completions.
   it('accepts the unified key via the x-api-key header', async () => {
-    const server = app.listen(0);
+    const server = app.listen(0, '127.0.0.1');
+    if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
     const addr = server.address() as any;
     const res = await fetch(`http://127.0.0.1:${addr.port}/v1/responses`, {
       method: 'POST',
@@ -129,6 +202,55 @@ describe('POST /v1/responses (#96)', () => {
     expect(completed).toContain('"output_text":"Hello"');
   });
 
+  it('stream: records ttfb on the first reasoning token, not the first visible text (#764)', async () => {
+    mockRouteRequest.mockReturnValue(fakeRoute({
+      async chatCompletion() { throw new Error('should not be called'); },
+      async *streamChatCompletion() {
+        // Reasoning models stream thinking before any visible text. ttfb must
+        // count the first token of ANY kind; a real delay between the
+        // reasoning frame and the first text frame makes the two moments
+        // measurable in the requests row.
+        yield { id: 'c', object: 'chat.completion.chunk', created: 0, model: 'fake-model', choices: [{ index: 0, delta: { reasoning_content: 'thinking hard…', content: null }, finish_reason: null }] };
+        await new Promise(r => setTimeout(r, 400));
+        yield { id: 'c', object: 'chat.completion.chunk', created: 0, model: 'fake-model', choices: [{ index: 0, delta: { content: 'Hello' }, finish_reason: null }] };
+        yield { id: 'c', object: 'chat.completion.chunk', created: 0, model: 'fake-model', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] };
+      },
+    }));
+
+    const { status, text } = await post(app, '/v1/responses', { input: 'hi', stream: true }, key);
+    expect(status).toBe(200);
+    expect(text).toContain('event: response.completed');
+    const rows = getDb().prepare("SELECT status, latency_ms, ttfb_ms FROM requests ORDER BY id DESC LIMIT 1").all() as any[];
+    expect(rows[0].status).toBe('success');
+    expect(rows[0].ttfb_ms).not.toBeNull();
+    // ttfb must be the reasoning-head moment (well before the text token that
+    // triggers the commit), not the flush time ≈ latency.
+    expect(rows[0].ttfb_ms).toBeLessThan(rows[0].latency_ms - 250);
+    // The completed Response reports the thinking tokens truthfully instead of
+    // a hardcoded 0: 'thinking hard…' is 14 chars → ceil(14/4) = 4.
+    const completed = text.split('event: response.completed')[1];
+    const payload = JSON.parse(completed.slice(completed.indexOf('{')));
+    expect(payload.response.usage.output_tokens_details.reasoning_tokens).toBe(4);
+  });
+
+  it('non-stream: reports reasoning_tokens from the provider usage when advertised', async () => {
+    mockRouteRequest.mockReturnValue(fakeRoute({
+      async chatCompletion() {
+        return {
+          id: 'c', object: 'chat.completion', created: 0, model: 'fake-model',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'answer', reasoning_content: 'thinking' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 3, completion_tokens: 6, total_tokens: 9, completion_tokens_details: { reasoning_tokens: 2 } },
+        };
+      },
+      async *streamChatCompletion() { /* unused */ },
+    }));
+
+    const { status, text } = await post(app, '/v1/responses', { input: 'hi', stream: false }, key);
+    expect(status).toBe(200);
+    const body = JSON.parse(text);
+    expect(body.usage.output_tokens_details.reasoning_tokens).toBe(2);
+  });
+
   it('stream: tool-call deltas produce function_call events with assembled arguments', async () => {
     mockRouteRequest.mockReturnValue(fakeRoute({
       async chatCompletion() { throw new Error('nope'); },
@@ -143,6 +265,94 @@ describe('POST /v1/responses (#96)', () => {
     expect(text).toContain('event: response.function_call_arguments.delta');
     expect(text).toContain('event: response.function_call_arguments.done');
     expect(text).toContain('"arguments":"{\\"city\\":\\"SF\\"}"');
+  });
+
+  // The Responses streaming SDK indexes snapshot.output by output_index and
+  // crashes on a collision (an output_text delta with the same index as a
+  // function_call item). Models that stream tool_calls BEFORE any closing text
+  // (GLM/Qwen on this surface) used to leave the text item stuck at index 0
+  // while the function_call owned 0 too. Every output item must claim a dense,
+  // unique index.
+  it('stream: keeps output_index unique when tool_calls precede the text item', async () => {
+    mockRouteRequest.mockReturnValue(fakeRoute({
+      async chatCompletion() { throw new Error('nope'); },
+      async *streamChatCompletion() {
+        yield { id: 'c', object: 'chat.completion.chunk', created: 0, model: 'fake-model', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"ci' } }] }, finish_reason: null }] };
+        yield { id: 'c', object: 'chat.completion.chunk', created: 0, model: 'fake-model', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, type: 'function', function: { arguments: 'ty":"SF"}' } }] }, finish_reason: null }] };
+        yield { id: 'c', object: 'chat.completion.chunk', created: 0, model: 'fake-model', choices: [{ index: 0, delta: { content: 'done' }, finish_reason: null }] };
+        yield { id: 'c', object: 'chat.completion.chunk', created: 0, model: 'fake-model', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] };
+      },
+    }));
+
+    const { text } = await post(app, '/v1/responses', { input: 'do it', stream: true }, key);
+    const indices: number[] = [...text.matchAll(/"output_index":(\d+)/g)].map((m) => Number(m[1]));
+    expect(indices.length).toBeGreaterThan(0);
+    // tool_calls + text = two distinct items, so both 0 AND 1 must appear and
+    // the function_call item must not share the text item's index.
+    expect(new Set(indices)).toContain(0);
+    expect(new Set(indices)).toContain(1);
+    // the closing text delta must reference the text item (index 1), not 0
+    const textDelta = text.split('event: response.output_text.delta')[1];
+    expect(textDelta).toContain('"output_index":1');
+    expect(textDelta).toContain('"delta":"done"');
+  });
+
+  it('rejects computer-use requests with a clear 422 before translation', async () => {
+    mockRouteRequest.mockClear();
+    const { status, text } = await post(app, '/v1/responses', {
+      input: 'control the computer',
+      tools: [{ type: 'computer_use_preview', name: 'computer' }],
+    }, key);
+    expect(status).toBe(422);
+    const body = JSON.parse(text);
+    expect(body.error.code).toBe('no_computer_use_model');
+    expect(body.error.type).toBe('invalid_request_error');
+    expect(mockRouteRequest).not.toHaveBeenCalled();
+  });
+
+  it('accepts computer_call_output round-trip items without 400 (validation leniency)', async () => {
+    mockRouteRequest.mockReturnValue(fakeRoute({
+      async chatCompletion() {
+        return {
+          id: 'c', object: 'chat.completion', created: 0, model: 'fake-model',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        };
+      },
+      async *streamChatCompletion() { /* unused */ },
+    }));
+
+    const { status, text } = await post(app, '/v1/responses', {
+      input: [
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: 'planning' }] },
+        { type: 'message', role: 'user', content: 'what is the weather?' },
+      ],
+    }, key);
+    expect(status).toBe(200);
+    expect(JSON.parse(text).output_text).toBe('ok');
+  });
+
+  it('accepts built-in tool call items (web_search_call, mcp_call) without 400', async () => {
+    mockRouteRequest.mockReturnValue(fakeRoute({
+      async chatCompletion() {
+        return {
+          id: 'c', object: 'chat.completion', created: 0, model: 'fake-model',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        };
+      },
+      async *streamChatCompletion() { /* unused */ },
+    }));
+
+    const { status, text } = await post(app, '/v1/responses', {
+      input: [
+        { type: 'web_search_call', id: 'ws_1', status: 'completed' },
+        { type: 'mcp_call', id: 'mcp_1', name: 'lookup', arguments: '{}' },
+        { type: 'message', role: 'user', content: 'summarize the results' },
+      ],
+    }, key);
+    expect(status).toBe(200);
+    expect(JSON.parse(text).output_text).toBe('ok');
   });
 
   it('routes built-in Responses tools through tool-capable models', async () => {

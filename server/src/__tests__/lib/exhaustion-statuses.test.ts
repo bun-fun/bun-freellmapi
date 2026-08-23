@@ -96,6 +96,21 @@ describe('isContextTooLargeError', () => {
     expect(isContextTooLargeError(new Error('request exceeds the maximum number of tokens'))).toBe(true);
   });
 
+  it('flags Zhipu AI prompt-length 400s (error 1261: "Prompt exceeds max length")', () => {
+    // #873: Zhipu returns HTTP 400 with "Prompt exceeds max length" for an
+    // over-long context. Its wording matches none of the OpenAI/Anthropic/Google
+    // markers, so it was mis-bucketed as provider_bad_request instead of
+    // context_too_large.
+    expect(isContextTooLargeError(Object.assign(
+      new Error('Zhipu API error 400: Prompt exceeds max length. Please shorten the prompt or set a longer context length.'),
+      { status: 400 },
+    ))).toBe(true);
+    expect(classifyAttemptError(Object.assign(
+      new Error('Zhipu API error 400: Prompt exceeds max length.'),
+      { status: 400 },
+    ))).toBe('context_too_large');
+  });
+
   it('flags literal HTTP 413s, including Groq TPM-ceiling 413s (Requested > Limit can never fit)', () => {
     expect(isContextTooLargeError(Object.assign(
       new Error('Groq API error 413: Request too large for model `llama-3.3-70b-versatile` in organization `org_x` on tokens per minute (TPM): Limit 30000, Requested 33476'),

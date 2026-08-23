@@ -5,7 +5,8 @@ import { getDb, initDb } from '../../db/index.js';
 import { mintDashboardToken } from '../helpers/auth.js';
 
 async function get(app: Express, path: string, token: string) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const address = server.address() as { port: number };
   const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
     headers: { Authorization: `Bearer ${token}` },

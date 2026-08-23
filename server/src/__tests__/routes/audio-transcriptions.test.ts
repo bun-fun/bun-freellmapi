@@ -49,7 +49,8 @@ interface MultipartOpts {
  *  using the saved real fetch so a mocked globalThis.fetch only intercepts
  *  upstream provider calls. */
 async function postTranscription(app: Express, opts: MultipartOpts) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const addr = server.address() as any;
   const form = new FormData();
   if (opts.file) {

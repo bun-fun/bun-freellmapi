@@ -41,6 +41,10 @@ describe('provider-quota: pool inference', () => {
     expect(inferQuotaPoolKey('groq')).toBe('groq::account');
     expect(inferQuotaPoolKey('openrouter', 'meta-llama/llama-3.1-8b-instruct:free')).toBe('openrouter::free');
     expect(inferQuotaPoolKey('openrouter', 'openai/gpt-4o')).toBe('openrouter::account');
+    // AnyAPI's 100K tokens/day is one account-wide budget, so every model on
+    // the platform shares a single pool.
+    expect(inferQuotaPoolKey('anyapi')).toBe('anyapi::free');
+    expect(inferQuotaPoolKey('anyapi', 'qwen/qwen3-coder:free')).toBe('anyapi::free');
     // Unknown platform falls back to platform::model or platform::account.
     expect(inferQuotaPoolKey('acme' as any, 'x')).toBe('acme::x');
     expect(inferQuotaPoolKey('acme' as any)).toBe('acme::account');
@@ -75,6 +79,34 @@ describe('provider-quota: record + read round-trip', () => {
     expect(row).toBeDefined();
     expect(row!.limit).toBe(1000);
     expect(row!.remaining).toBe(950);
+  });
+
+  // #705: the panel rendered a bare "key #7", which names nothing an operator
+  // recognises once a provider holds several keys.
+  it('carries the label of the key the state belongs to', () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO api_keys (id, platform, label, encrypted_key, iv, auth_tag, status, enabled)
+      VALUES (41, 'groq', 'Work account', 'x', 'y', 'z', 'unknown', 1)
+    `).run();
+    recordQuotaObservation({
+      platform: 'groq', keyId: 41, quotaPoolKey: 'groq::account',
+      metric: 'requests', limit: 10, remaining: 1, source: 'header',
+    });
+
+    const row = getQuotaStateForKeys().find(s => s.keyId === 41);
+    expect(row!.keyLabel).toBe('Work account');
+  });
+
+  it('leaves the label null when the key row is gone', () => {
+    recordQuotaObservation({
+      platform: 'groq', keyId: 4242, quotaPoolKey: 'groq::account',
+      metric: 'requests', limit: 10, remaining: 1, source: 'header',
+    });
+
+    const row = getQuotaStateForKeys().find(s => s.keyId === 4242);
+    expect(row).toBeDefined();
+    expect(row!.keyLabel).toBeNull();
   });
 });
 

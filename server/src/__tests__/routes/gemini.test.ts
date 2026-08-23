@@ -11,7 +11,8 @@ async function request(
   body?: unknown,
   headers: Record<string, string> = {},
 ) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const address = server.address() as { port: number };
   const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
     method,

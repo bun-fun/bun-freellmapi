@@ -45,7 +45,7 @@ describe('static SPA: gzip compression + asset cache headers', () => {
   let server: Server;
   let port: number;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
     initDb(':memory:');
 
@@ -61,7 +61,8 @@ describe('static SPA: gzip compression + asset cache headers', () => {
     fs.writeFileSync(path.join(tmpDir, 'assets', 'vendor-Q1w2E3r4.js'), BIG_JS);
 
     process.env.CLIENT_DIST = tmpDir;
-    server = createApp().listen(0);
+    server = createApp().listen(0, '127.0.0.1');
+    if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
     port = (server.address() as { port: number }).port;
   });
 

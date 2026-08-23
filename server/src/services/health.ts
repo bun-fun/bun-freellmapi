@@ -5,6 +5,7 @@ import { decryptProxyUrl } from '../lib/key-proxy.js';
 import { withKeyProxy } from '../lib/proxy.js';
 import type { Platform, KeyStatus } from '@freellmapi/shared/types.js';
 import { inferQuotaPoolKey } from './provider-quota.js';
+import { updateDegradationState } from './degradation.js';
 import type { Scheduler } from '../lib/scheduler.js';
 import { sanitizeProviderErrorMessage } from '../lib/error-redaction.js';
 
@@ -276,6 +277,10 @@ export function checkAllKeys(opts: HealthPassOptions = {}): Promise<HealthPassRe
   checkAllInFlight = runHealthPass(opts).finally(() => {
     checkAllInFlight = null;
   });
+  // Keep the degraded-mode state machine in step with the latest verdicts
+  // (#904): a fleet-wide outage should flip the gateway into degraded mode
+  // shortly after the pass that observed it, not after the next request.
+  void checkAllInFlight.then(() => updateDegradationState());
   return checkAllInFlight;
 }
 

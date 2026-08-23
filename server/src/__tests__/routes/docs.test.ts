@@ -5,7 +5,8 @@ import { initDb } from '../../db/index.js';
 import { openapiSpec } from '../../docs/openapi.js';
 
 async function request(app: Express, method: string, path: string, headers: Record<string, string> = {}) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const addr = server.address() as any;
   const url = `http://127.0.0.1:${addr.port}${path}`;
   const res = await fetch(url, { method, headers });

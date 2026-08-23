@@ -199,7 +199,21 @@ export function decrypt(encrypted: string, iv: string, authTag: string): string 
   return decrypted;
 }
 
+// A masked key is display-only — it feeds the `maskedKey` field every key,
+// media, embedding and client-profile route hands to the dashboard — so it must
+// never be enough to reconstruct the secret. The old short-key branch was
+// `'****' + key.slice(-4)`, and slice(-4) keeps the last four characters no
+// matter how short the input is: a 4-character key was echoed back IN FULL, and
+// a 5-character key gave away 4 of its 5 characters. Short keys are not
+// hypothetical — proxy credentials, self-hosted Ollama tokens and local dev
+// keys all land here.
+//
+// So reveal nothing at all below 5 characters, and at most the last TWO up to
+// 8: enough tail to tell two rows apart in the UI, not enough to be a
+// meaningful share of the secret. Long keys keep the familiar prefix+suffix
+// form, where 8 revealed characters out of 20+ is a fixed, small fraction.
 export function maskKey(key: string): string {
-  if (key.length <= 8) return '****' + key.slice(-4);
+  if (key.length < 5) return '****';
+  if (key.length <= 8) return '****' + key.slice(-2);
   return key.slice(0, 4) + '...' + key.slice(-4);
 }

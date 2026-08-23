@@ -107,22 +107,88 @@ const UNSUPPORTED_SCHEMA_KEYS = new Set([
 
 const VENDOR_EXTENSION_SCHEMA_KEY = /^x-/i;
 
-export function sanitizeForGemini(schema: unknown): unknown {
-  return sanitizeSchema(schema, false);
+// Google's Schema proto types `type` as a single enum, but OpenAI-style
+// clients emit JSON Schema unions (`.nullable()` builders produce
+// `"type": ["number", "null"]`), which 400s with "Proto field is not
+// repeating, cannot start list". Collapse the union to its first concrete
+// member plus Gemini's own `nullable` flag — the inverse of what
+// normalizeGeminiSchema does on the inbound direction.
+interface CollapsedType {
+  type?: string;
+  nullable: boolean;
 }
 
-function sanitizeSchema(schema: unknown, insidePropertiesMap: boolean): unknown {
-  if (Array.isArray(schema)) return schema.map(value => sanitizeSchema(value, false));
+function collapseTypeUnion(value: unknown[]): CollapsedType {
+  const names = value.filter((entry): entry is string => typeof entry === 'string');
+  const nullable = names.some(name => name.toLowerCase() === 'null');
+  // A union of two concrete types has no Gemini equivalent; keeping the first
+  // is lossy but still describes the argument, where dropping `type` entirely
+  // would let the model emit anything.
+  const concrete = names.find(name => name.toLowerCase() !== 'null');
+  return { type: concrete, nullable };
+}
+
+// Best-effort JSON pointer resolution against the schema root, so a `$ref`
+// into `$defs`/`definitions` keeps its structure instead of collapsing to a
+// permissive `{}`. Anything else (remote refs, missing targets) still falls
+// back to dropping the keyword, like the other unsupported keywords do.
+function resolvePointer(root: unknown, ref: string): unknown {
+  if (!ref.startsWith('#/')) return undefined;
+  let node: unknown = root;
+  for (const rawSegment of ref.slice(2).split('/')) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return undefined;
+    const segment = decodeURIComponent(rawSegment).replace(/~1/g, '/').replace(/~0/g, '~');
+    node = (node as Record<string, unknown>)[segment];
+  }
+  return node;
+}
+
+interface SanitizeContext {
+  root: unknown;
+  // Refs expanded on the current path, so a self-referential definition drops
+  // out instead of recursing forever.
+  expanding: ReadonlySet<string>;
+}
+
+export function sanitizeForGemini(schema: unknown): unknown {
+  return sanitizeSchema(schema, false, { root: schema, expanding: new Set() });
+}
+
+function sanitizeSchema(schema: unknown, insidePropertiesMap: boolean, ctx: SanitizeContext): unknown {
+  if (Array.isArray(schema)) return schema.map(value => sanitizeSchema(value, false, ctx));
   if (!schema || typeof schema !== 'object') return schema;
   const out: Record<string, unknown> = {};
+  let nullable = false;
+  let inlined: Record<string, unknown> | undefined;
   for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
     if (insidePropertiesMap) {
-      out[key] = sanitizeSchema(value, false);
-    } else if (!UNSUPPORTED_SCHEMA_KEYS.has(key) && !VENDOR_EXTENSION_SCHEMA_KEY.test(key)) {
-      out[key] = sanitizeSchema(value, key === 'properties');
+      out[key] = sanitizeSchema(value, false, ctx);
+      continue;
+    }
+    if (key === '$ref' && typeof value === 'string' && !ctx.expanding.has(value)) {
+      const target = resolvePointer(ctx.root, value);
+      if (target && typeof target === 'object' && !Array.isArray(target)) {
+        inlined = sanitizeSchema(target, false, {
+          root: ctx.root,
+          expanding: new Set([...ctx.expanding, value]),
+        }) as Record<string, unknown>;
+      }
+      continue;
+    }
+    if (key === 'type' && Array.isArray(value)) {
+      const collapsed = collapseTypeUnion(value);
+      if (collapsed.type !== undefined) out.type = collapsed.type;
+      nullable = nullable || collapsed.nullable;
+      continue;
+    }
+    if (!UNSUPPORTED_SCHEMA_KEYS.has(key) && !VENDOR_EXTENSION_SCHEMA_KEY.test(key)) {
+      out[key] = sanitizeSchema(value, key === 'properties', ctx);
     }
   }
-  return out;
+  if (nullable) out.nullable = true;
+  // Keywords written alongside a `$ref` (description, overrides) win over the
+  // definition they point at.
+  return inlined ? { ...inlined, ...out } : out;
 }
 
 function serializeResponse(value: unknown): string {

@@ -336,6 +336,25 @@ function PageBoundary({ children }: { children: ReactNode }) {
   return <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
 }
 
+// Routes that own the whole viewport instead of sitting in the shell's centred,
+// padded column. Only the Playground so far: its three columns run edge to edge
+// and the transcript scrolls inside its own pane, so the page must be exactly
+// as tall as what is left under the navbar — not a centred card with margins.
+const FULL_BLEED_ROUTES = new Set(['/playground'])
+
+// The shell's content container. A full-bleed route drops the max-width and the
+// padding and becomes a flex child that fills the rest of the screen; every
+// other route keeps the exact classes it always had.
+function PageContainer({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  const fullBleed = FULL_BLEED_ROUTES.has(location.pathname)
+  return (
+    <main className={fullBleed ? 'flex min-h-0 flex-1 flex-col' : 'mx-auto max-w-6xl px-6 py-8'}>
+      {children}
+    </main>
+  )
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -343,9 +362,13 @@ function App() {
         <I18nProvider>
           <BrowserRouter basename={import.meta.env.BASE_URL}>
             <AuthGate>
-              <div className={`min-h-screen ${isDesktopApp ? 'desktop-backdrop' : 'bg-background'}`}>
+              {/* Column, so a full-bleed route can claim the height the navbar
+                  leaves without anyone having to know how tall the navbar is.
+                  Fixed-position children (toaster, palette, reminder) are out of
+                  flow, and a padded route stretches to nothing it can show. */}
+              <div className={`flex min-h-screen flex-col ${isDesktopApp ? 'desktop-backdrop' : 'bg-background'}`}>
                 <Navbar />
-                <main className="mx-auto max-w-6xl px-6 py-8">
+                <PageContainer>
                   <PageBoundary>
                     <Routes>
                       <Route path="/" element={<Navigate to="/models/chat" replace />} />
@@ -371,7 +394,7 @@ function App() {
                       <Route path="*" element={<NotFoundPage />} />
                     </Routes>
                   </PageBoundary>
-                </main>
+                </PageContainer>
                 <Toaster />
                 <CommandPalette />
                 <UpdateReminder />

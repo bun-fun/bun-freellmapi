@@ -29,6 +29,7 @@ export const PLATFORMS: { value: Platform; label: string; url: string; keyless?:
   { value: 'google', label: 'Google AI Studio', url: 'https://aistudio.google.com/apikey' },
   { value: 'groq', label: 'Groq', url: 'https://console.groq.com/keys' },
   { value: 'cerebras', label: 'Cerebras', url: 'https://cloud.cerebras.ai' },
+  { value: 'bai', label: 'B.AI (promotional free model)', url: 'https://b.ai' },
   { value: 'nvidia', label: 'NVIDIA NIM', url: 'https://build.nvidia.com/settings/api-keys' },
   { value: 'mistral', label: 'Mistral', url: 'https://console.mistral.ai/api-keys/' },
   { value: 'openrouter', label: 'OpenRouter', url: 'https://openrouter.ai/keys' },
@@ -54,6 +55,7 @@ export const PLATFORMS: { value: Platform; label: string; url: string; keyless?:
   { value: 'navy', label: 'NavyAI (free key)', url: 'https://api.navy' },
   { value: 'nara', label: 'NaraRouter (free key)', url: 'https://router.bynara.id' },
   { value: 'sealion', label: 'SEA-LION (free key)', url: 'https://sea-lion.ai' },
+  { value: 'orcarouter', label: 'OrcaRouter (free key)', url: 'https://www.orcarouter.ai' },
   // AnyAPI advertises 100K tokens/day free, but live testing on 2026-08-10
   // could not get a single free-tier request served (see
   // CATALOG-ANYAPI-SMOKE-2026-08-10 in the ops repo). No quota claim until
@@ -61,6 +63,14 @@ export const PLATFORMS: { value: Platform; label: string; url: string; keyless?:
   { value: 'anyapi', label: 'AnyAPI (free key)', url: 'https://anyapi.ai' },
   { value: 'modelscope', label: 'ModelScope (free key, needs Aliyun cn binding)', url: 'https://modelscope.cn/my/myaccesstoken' },
   { value: 'aihorde', label: 'AI Horde (no key needed, slow)', url: 'https://aihorde.net/register', keyless: true },
+  // Chinese domestic providers. All four gate API access behind real-name
+  // verification on the cloud account, so the label says so up front rather
+  // than letting a user mint a key that 401s on every call (the ModelScope
+  // lesson, #581). LongCat is the one that takes an overseas email signup.
+  { value: 'qianfan', label: 'Baidu Qianfan (free ERNIE, needs cn real-name)', url: 'https://console.bce.baidu.com/qianfan/overview' },
+  { value: 'volcengine', label: 'Volcengine Ark (free daily, needs cn real-name)', url: 'https://console.volcengine.com/ark' },
+  { value: 'longcat', label: 'LongCat (free daily, email signup ok)', url: 'https://longcat.chat/platform' },
+  { value: 'xfyun', label: 'iFlytek Spark (free Lite, needs cn real-name)', url: 'https://console.xfyun.cn' },
 ]
 
 // 'custom' is configured through its own form (base URL + model), not the

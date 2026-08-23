@@ -362,6 +362,10 @@ export async function discoverEndpointModels(baseUrl: string, apiKey: string): P
   return parseModelCatalog(payload);
 }
 
+/** Output cap on the probe request. Exported so the test can assert the floor
+ *  rather than a magic number. See the call site for why it is not 1. */
+export const PROBE_MAX_TOKENS = 4;
+
 /**
  * Fire one minimal real chat request at a custom endpoint to measure latency
  * and confirm the key works end-to-end ("probe now", #685 follow-up). When the
@@ -403,7 +407,12 @@ export async function probeEndpointModel(
       apiKey,
       [{ role: 'user', content: 'ping' }],
       modelId,
-      { max_tokens: 1 },
+      // Not 1: several relays enforce a floor above it and 400 the probe
+      // outright ("max_tokens must be greater than 2" on b.ai's
+      // deepseek-v4-flash, #903), so a probe that only wanted to measure
+      // latency reported the endpoint as broken. 4 clears the floors seen so
+      // far and still costs a rounding error.
+      { max_tokens: PROBE_MAX_TOKENS },
     );
   } catch (err) {
     const reason = isAbortLikeError(err) ? 'timed out' : ((err as Error)?.message ?? 'unknown error');

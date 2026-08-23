@@ -14,7 +14,7 @@ import {
   isRetryableError, isRateLimitSignal, isPaymentRequiredError,
   isModelNotFoundError, isModelAccessForbiddenError,
 } from '../lib/error-classify.js';
-import { contentToString } from '../lib/content.js';
+import { contentToString, stripImagesFromMessages } from '../lib/content.js';
 import { sanitizeProviderErrorMessage } from '../lib/error-redaction.js';
 import { getSetting, setSetting } from '../db/index.js';
 import type { CompletionOptions } from '../providers/base.js';
@@ -446,7 +446,7 @@ export function diversifyChain(ordered: FusionCandidate[]): FusionCandidate[] {
  * both the panel and its refills span genuinely different perspectives before
  * doubling up on either axis.
  */
-function selectPanel(config: FusionConfig, requirements: { requireTools?: boolean; estimatedTokens: number }): { panel: FusionCandidate[]; overflow: FusionCandidate[]; dropped: string[] } {
+export function selectPanel(config: FusionConfig, requirements: { requireTools?: boolean; requireVision?: boolean; estimatedTokens: number }): { panel: FusionCandidate[]; overflow: FusionCandidate[]; dropped: string[] } {
   const maxK = panelMaxK();
 
   if (config.models && config.models.length > 0) {
@@ -458,6 +458,7 @@ function selectPanel(config: FusionConfig, requirements: { requireTools?: boolea
       const cand = resolveFusionCandidate(id);
       if (!cand) { dropped.push(`${id} (unknown or disabled)`); continue; }
       if (requirements.requireTools && !cand.supportsTools) { dropped.push(`${id} (no tool-calling support)`); continue; }
+      if (requirements.requireVision && !cand.supportsVision) { dropped.push(`${id} (no vision support)`); continue; }
       if (seen.has(cand.modelDbId)) continue; // de-dup repeats
       seen.add(cand.modelDbId);
       panel.push(cand);
@@ -470,7 +471,8 @@ function selectPanel(config: FusionConfig, requirements: { requireTools?: boolea
   // Size-aware: the chain excludes models that cannot hold a prompt this large,
   // so a too-small model never claims a slot it is guaranteed to fail.
   const ordered = getOrderedFusionChain(requirements.estimatedTokens)
-    .filter(c => !requirements.requireTools || c.supportsTools);
+    .filter(c => !requirements.requireTools || c.supportsTools)
+    .filter(c => !requirements.requireVision || c.supportsVision);
 
   // Diversity-first ordering of the whole servable chain along provider AND
   // model family (see diversifyChain). The first K are the panel; the rest are
@@ -494,7 +496,7 @@ const JUDGE_SYSTEM_PROMPT =
   'Then REWRITE it all from scratch, in your own words, as one clear, well-structured, self-contained answer that makes complete sense by itself. ' +
   'Do not mention that other answers exist, do not refer to "Response 1/2/3", do not compare the responses, and do not describe your process — just deliver the final, authoritative answer directly to the user.';
 
-function buildJudgeMessages(original: ChatMessage[], answers: PanelAnswer[]): ChatMessage[] {
+export function buildJudgeMessages(original: ChatMessage[], answers: PanelAnswer[], stripImages = false): ChatMessage[] {
   const ok = answers.filter(a => a.status === 'ok' && a.content);
   const panelBlock = ok
     .map((a, i) => `--- Response ${i + 1} ---\n${a.content}`)
@@ -505,7 +507,7 @@ function buildJudgeMessages(original: ChatMessage[], answers: PanelAnswer[]): Ch
   // prompt leads so it frames everything that follows.
   return [
     { role: 'system', content: JUDGE_SYSTEM_PROMPT },
-    ...original,
+    ...(stripImages ? stripImagesFromMessages(original) : original),
     {
       role: 'user',
       content:
@@ -553,18 +555,22 @@ export async function runFusion(params: {
   options: CompletionOptions;
   estimatedTokens: number;
   hooks?: FusionHooks;
+  vision?: boolean;
 }): Promise<FusionResult> {
-  const { messages, options, estimatedTokens, hooks } = params;
+  const { messages, options, estimatedTokens, hooks, vision = false } = params;
   // Apply the dashboard-saved default; the request's inline fusion field (if
   // any) has already-merged precedence field-by-field.
   const config = resolveEffectiveConfig(params.config);
   const strategy = config.strategy ?? 'synthesize';
 
   const requireTools = (options.tools?.length ?? 0) > 0;
-  const { panel, overflow, dropped } = selectPanel(config, { requireTools, estimatedTokens });
+  const { panel, overflow, dropped } = selectPanel(config, { requireTools, requireVision: vision, estimatedTokens });
   if (panel.length === 0) {
+    const hint = vision
+      ? 'No vision-capable model is servable for the panel. Enable a vision model in the Fallback Chain or pass `fusion.models` with vision-capable model ids.'
+      : 'Provide `fusion.models` with enabled model ids, or enable models in the Fallback Chain.';
     throw new FusionError(
-      'fusion: no usable models for the panel. Provide `fusion.models` with enabled model ids, or enable models in the Fallback Chain.',
+      `fusion: no usable models for the panel. ${hint}`,
       400,
     );
   }
@@ -695,7 +701,7 @@ export async function runFusion(params: {
     // (longest as a cheap proxy for completeness) — no judge call.
     finalText = textSurvivors.slice().sort((a, b) => (b.content!.length - a.content!.length))[0].content!;
   } else {
-    const judgeMessages = buildJudgeMessages(messages, textSurvivors);
+    const judgeMessages = buildJudgeMessages(messages, textSurvivors, vision);
     // The judge prompt carries every panel answer, so its input is much larger
     // than the original — size the routing estimate accordingly.
     const judgeEstimate = estimatedTokens + textSurvivors.reduce((n, a) => n + Math.ceil((a.content?.length ?? 0) / 4), 0);

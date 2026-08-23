@@ -81,11 +81,13 @@ describe('null-limits heuristic only fires on quota signals (#592)', () => {
   });
 
   it('real 429s still escalate — the Ollama-Cloud opaque-quota protection holds', () => {
-    // 1st 429 → transient (no signal yet), then the ladder: 2m, 10m, 1h.
+    // 1st 429 → transient (no signal yet), then the ladder: 2m, 10m. This route
+    // publishes no RPD/TPD, so escalation stops at the unknown-limit 10m cap
+    // rather than climbing to the 1h/24h quarantine on an inferred verdict.
     expect(cooldownDecisionForError(route, real429()).durationMs).toBe(TRANSIENT);
     expect(cooldownDecisionForError(route, real429()).durationMs).toBe(2 * MINUTE);
     expect(cooldownDecisionForError(route, real429()).durationMs).toBe(10 * MINUTE);
-    expect(cooldownDecisionForError(route, real429()).durationMs).toBe(60 * MINUTE);
+    expect(cooldownDecisionForError(route, real429()).durationMs).toBe(10 * MINUTE);
   });
 });
 

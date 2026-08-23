@@ -20,6 +20,9 @@ export interface GenerateContext {
   profile: string;
   models: CatalogModel[];
   homeDir: string;
+  /** An explicit `--model`. Overrides each generator's default-model
+   *  heuristic; validated against the unfiltered catalog by the caller. */
+  requestedModelId?: string;
 }
 
 export interface Generation {

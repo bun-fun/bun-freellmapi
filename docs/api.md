@@ -15,6 +15,7 @@ Any OpenAI-compatible client works (Anthropic / Claude clients too — see [Anth
 - [Ollama emulation](#ollama-emulation)
 - [Revocable URL tokens](#revocable-url-tokens)
 - [Vision / image input](#vision--image-input)
+- [Document attachments](#document-attachments)
 - [Images & text-to-speech](#images--text-to-speech)
 - [Fusion (multi-model synthesis)](#fusion-multi-model-synthesis)
 - [Response headers](#response-headers)
@@ -223,6 +224,21 @@ print(resp.choices[0].message.content)
 
 If no vision-capable model is enabled in your Fallback Chain, an image request returns a clear `422` (`code: "no_vision_model"`) rather than silently dropping the image. (Image input on `/v1/responses` isn't supported yet — use `/v1/chat/completions`.)
 
+## Document attachments
+
+Anthropic's `document` content blocks are accepted on `/v1/messages` when their source is already text:
+
+```json
+{"type": "document", "title": "contract.txt",
+ "source": {"type": "text", "media_type": "text/plain", "data": "PAYMENT TERMS: net 30."}}
+```
+
+`text` and `content` sources are inlined into the prompt, wrapped in a fence tagged with a hash of the document body so the model can tell quoted material from your instructions. The tag is derived from the content rather than randomized, so a repeated attachment keeps the prompt prefix stable and stays cacheable.
+
+**Binary sources — `base64` (PDF, DOCX, XLSX…) and `url` — return a `400`.** No provider in the pool accepts them, and there is no local converter, so the honest answer is to refuse: forwarding the request would drop the attachment and produce a confident answer about a document the model never saw. The rejection happens before routing, so it spends no provider quota. Send the extracted text instead.
+
+`url` sources are refused rather than fetched on your behalf; making the proxy retrieve arbitrary URLs would turn it into a request forwarder for whatever a client names.
+
 ## Images & text-to-speech
 
 `POST /v1/images/generations` and `POST /v1/audio/speech` route across the providers that serve media models, including custom OpenAI-compatible media endpoints. Browse and toggle them on the dashboard's **Models → Image / Audio** tabs.
@@ -233,7 +249,24 @@ Request the virtual `fusion` model and the router fans your prompt out to a pane
 
 ## Response headers
 
-Every response carries an `X-Routed-Via: <platform>/<model>` header so you can see which provider actually served each call. If a request fell over between providers, you'll also see `X-Fallback-Attempts: N`.
+Every response carries an `X-Routed-Via: <platform>/<model>` header so you can see which provider actually served each call. If a request fell over between providers, you'll also see `X-Fallback-Attempts: N` and `X-Fallback-Trail`, which names each hop that failed and why:
+
+```
+X-Fallback-Attempts: 2
+X-Fallback-Trail: groq/llama-3.3-70b key1=rate_limited; google/gemini-2.5-flash key2=timeout
+```
+
+`X-Fallback-Detail` adds what each of those hops **cost**, which is the part you cannot reconstruct from the trail — a request answered in 40s reads identically whether one provider stalled for 39 seconds or four failed fast:
+
+```
+X-Fallback-Detail: groq/llama-3.3-70b key1=rate_limited t=0+39000ms msg=Groq API error 429: rate limit; google/gemini-2.5-flash key2=timeout t=39000+12ms
+```
+
+`t=<start>+<duration>ms` is the offset from the start of the failover chain and how long that hop ran. `msg=` is the provider's error, redacted and truncated; it is last in each record, and any semicolon inside it becomes a comma so `; ` stays an unambiguous record separator.
+
+The detail header is **off by default** — it puts hop timings and provider error text on the response. Turn it on with `FALLBACK_DETAIL_HEADER=1` or the `expose_fallback_detail_header` settings key, which takes precedence. Both headers list at most ten hops and then a `; +N more` marker.
+
+Only hops that already **failed** can appear. The hop actually serving your request is recorded after its response finishes — after the JSON is sent, or after the stream closes — so its duration does not exist while the headers are still open. Use `X-Routed-Via` to see which provider that was.
 
 HTTP headers only carry printable ASCII, so a model id with characters outside that range (a Chinese name from a relay catalog, for example) is percent-encoded in the header — run the value through `decodeURIComponent` (or `urllib.parse.unquote`) to read it back.
 

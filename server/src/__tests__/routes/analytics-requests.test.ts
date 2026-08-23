@@ -8,7 +8,8 @@ import { mintDashboardToken } from '../helpers/auth.js';
 let dashToken = '';
 
 async function request(app: Express, path: string) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const addr = server.address() as any;
   const url = `http://127.0.0.1:${addr.port}${path}`;
 
@@ -99,6 +100,18 @@ describe('GET /api/analytics/requests', () => {
     const successes = await request(app, '/api/analytics/requests?range=7d&status=success');
     expect(successes.body.total).toBe(1);
     expect(successes.body.rows.map((r: any) => r.status)).toEqual(['success']);
+  });
+
+  it("filters by the 'canceled' status (#752)", async () => {
+    insertCall(recentUtcTimestamp(8).sql, '10.0.0.1', 'ua', 'success');
+    insertCall(recentUtcTimestamp(9).sql, '10.0.0.1', 'ua', 'canceled');
+
+    const canceled = await request(app, '/api/analytics/requests?range=7d&status=canceled');
+    expect(canceled.status).toBe(200);
+    expect(canceled.body.total).toBe(1);
+    expect(canceled.body.rows.map((r: any) => r.status)).toEqual(['canceled']);
+    // ...and canceled rows still show up unfiltered.
+    expect((await request(app, '/api/analytics/requests?range=7d')).body.total).toBe(2);
   });
 
   it('filters by platform, and combines with the status filter', async () => {

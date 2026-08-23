@@ -1,8 +1,26 @@
+import { createHash } from 'node:crypto';
 import { OpenAICompatProvider } from './openai-compat.js';
 import type { KeyValidationResult } from './base.js';
 import { recordQuotaObservationsFromResponse, type QuotaObservationContext } from '../services/provider-quota.js';
 
 const MODELSCOPE_BASE_URL = 'https://api-inference.modelscope.cn/v1';
+
+// A successful validation is cached per key for this long. The 5-minute
+// health pass would otherwise burn ~288 paid 1-token completions per key
+// per day against the account's magic-grain (魔粒) quota — observed as
+// 2 魔粒 per ultra-tier request (2026-08-14). A revoked key is still caught
+// by the next real request's 401 handling (error-classify disables it), so
+// the cache only delays proactive detection, never hides a live failure.
+const DEFAULT_VALIDATE_CACHE_MS = 24 * 60 * 60 * 1000;
+
+function modelscopeValidateCacheMs(): number {
+  const raw = process.env.MODELSCOPE_VALIDATE_CACHE_MS;
+  if (raw !== undefined && raw.trim() !== '') {
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 0) return n;
+  }
+  return DEFAULT_VALIDATE_CACHE_MS;
+}
 
 /**
  * ModelScope (魔搭社区, Alibaba) — OpenAI-compatible inference API.
@@ -24,10 +42,15 @@ const MODELSCOPE_BASE_URL = 'https://api-inference.modelscope.cn/v1';
  * completion. The model id is picked dynamically from GET /v1/models (first
  * entry) because the roster churns — a hardcoded id would rot.
  *
- * COST: a successful validation burns 1 request (and ~1 output token) of the
- * 2000-requests/day account-wide free quota per health check. A failed-auth
- * validation is rejected before generation and, per maintainer reports, does
- * not count against quota.
+ * COST: a successful validation burns 1 paid 1-token completion per health
+ * check against the account's magic-grain (魔粒) quota — observed as 2 魔粒
+ * per ultra-tier request (2026-08-14), not the historical 2000-requests/day
+ * free API quota. With the default 5-minute health pass that would be ~288
+ * paid probes per key per day. A successful validation is therefore cached
+ * per key for MODELSCOPE_VALIDATE_CACHE_MS (default 24h) — repeat health
+ * passes return true without re-probing, taking the steady-state cost to one
+ * probe per key per day. A failed-auth validation is rejected before
+ * generation and, per maintainer reports, does not count against quota.
  *
  * Community testers must confirm (we have NO real token for this platform):
  * the maintainer-documented bad-binding failure is
@@ -38,6 +61,11 @@ const MODELSCOPE_BASE_URL = 'https://api-inference.modelscope.cn/v1';
  * actionable reason instead of a generic "invalid key". See issue #581.
  */
 export class ModelScopeProvider extends OpenAICompatProvider {
+  /** key-material fingerprint → last successful validation wall-clock (ms).
+   *  Keyed on the token itself, not the row id, so editing a key in place
+   *  re-probes instead of inheriting the old token's verdict. */
+  private readonly lastValidatedAt = new Map<string, number>();
+
   constructor() {
     super({
       platform: 'modelscope',
@@ -52,6 +80,21 @@ export class ModelScopeProvider extends OpenAICompatProvider {
   }
 
   override async validateKey(apiKey: string, quotaContext?: QuotaObservationContext): Promise<KeyValidationResult> {
+    // Validation cache: a key validated successfully within
+    // MODELSCOPE_VALIDATE_CACHE_MS is trusted without re-probing. The
+    // 5-minute health pass would otherwise burn ~288 paid 1-token
+    // completions per key per day against the magic-grain quota. A revoked
+    // key is still caught by the next real request's 401 handling, so this
+    // only delays proactive detection.
+    const cacheMs = modelscopeValidateCacheMs();
+    const fingerprint = createHash('sha256').update(apiKey).digest('hex');
+    if (cacheMs > 0) {
+      const last = this.lastValidatedAt.get(fingerprint);
+      if (last !== undefined && Date.now() - last < cacheMs) {
+        return true;
+      }
+    }
+
     // Transport errors (DNS / timeout / TLS) propagate — health.ts marks
     // status='error' without counting toward auto-disable; only a confirmed
     // 401/403 disables a key.
@@ -101,6 +144,10 @@ export class ModelScopeProvider extends OpenAICompatProvider {
     // (surfaces the alibaba-binding reason); everything else — 200, but also
     // 400/404 (probe model quirk), 429 (quota) — proves the token
     // authenticated and returns true.
-    return this.validationResult(res);
+    const result = await this.validationResult(res);
+    if (result === true && cacheMs > 0) {
+      this.lastValidatedAt.set(fingerprint, Date.now());
+    }
+    return result;
   }
 }

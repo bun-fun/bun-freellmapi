@@ -7,6 +7,14 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Globe } from 'lucide-react'
 import { useI18n } from '@/i18n'
+import { PLATFORMS, CUSTOM_GROUP } from './shared'
+import type { ApiKey } from '../../../../shared/types'
+
+/** Host of a probe target, for display. Falls back to the raw value so a
+ *  malformed override still shows something rather than vanishing. */
+function hostOf(url: string): string {
+  try { return new URL(url).host } catch { return url }
+}
 
 export function ProxySettingsSection() {
   const { t } = useI18n()
@@ -16,6 +24,17 @@ export function ProxySettingsSection() {
   const { data, isError } = useQuery<{ proxyUrl: string; enabled: boolean; bypassPlatforms: string[]; active: boolean }>({
     queryKey: ['proxy-url'],
     queryFn: () => apiFetch('/api/settings/proxy'),
+  })
+
+  // #825: the per-platform route-via-proxy switch used to live only inside the
+  // group dropdown on the Providers tab (two clicks per platform, no bulk, and
+  // no way to see which platforms route through the proxy at a glance). Render
+  // the same bypass list here as visible switches, one per platform that has
+  // keys — custom endpoints included, so they get a per-endpoint-style toggle
+  // instead of being lumped into a group.
+  const { data: keys = [] } = useQuery<ApiKey[]>({
+    queryKey: ['keys'],
+    queryFn: () => apiFetch('/api/keys'),
   })
 
   // Sync from server when the query refetches; keep the user's typed value
@@ -32,6 +51,14 @@ export function ProxySettingsSection() {
       queryClient.invalidateQueries({ queryKey: ['proxy-url'] })
       setProxyUrl(result.proxyUrl)
     },
+  })
+
+  // #863: test the DRAFT proxy URL (or the saved one when the input is empty)
+  // without saving anything. Result shown inline; failures carry the reason.
+  const testProxy = useMutation({
+    meta: { silenceToast: true },
+    mutationFn: (body: { proxyUrl?: string }) =>
+      apiFetch<{ ok: boolean; latencyMs: number; status?: number; error?: string; target?: string }>('/api/settings/proxy/test', { method: 'POST', body: JSON.stringify(body) }),
   })
 
   const submit = (e: React.FormEvent) => {
@@ -81,14 +108,74 @@ export function ProxySettingsSection() {
               className="font-mono text-xs"
             />
           </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={testProxy.isPending}
+            onClick={() => testProxy.mutate({ proxyUrl })}
+          >
+            {testProxy.isPending ? t('keys.testingProxy') : t('keys.testProxy')}
+          </Button>
           <Button type="submit" size="sm" disabled={saveProxy.isPending}>
             {saveProxy.isPending ? t('keys.savingProxy') : t('keys.saveProxy')}
           </Button>
         </form>
       )}
 
+      {testProxy.isSuccess && (
+        <p className={`text-xs mt-2 ${testProxy.data.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}>
+          {testProxy.data.ok
+            ? t('keys.proxyTestOk', { ms: String(testProxy.data.latencyMs) })
+            : t('keys.proxyTestFail', { reason: testProxy.data.error ?? '' })}
+          {/* Which endpoint was probed. A pass or a fail is only actionable if
+              you know what was reached — and the target varies with the keys
+              you hold. A bare host name needs no translation. */}
+          {testProxy.data.target && (
+            <span className="text-muted-foreground ml-1.5 font-mono">
+              {hostOf(testProxy.data.target)}
+            </span>
+          )}
+        </p>
+      )}
+      {testProxy.isError && (
+        <p className="text-destructive text-xs mt-2">{(testProxy.error as Error).message}</p>
+      )}
+
       {saveProxy.isError && (
         <p className="text-destructive text-xs mt-2">{(saveProxy.error as Error).message}</p>
+      )}
+
+      {/* #825: visible per-platform route-via-proxy switches, one per platform
+          that has keys. checked = routed through the proxy (not in the bypass
+          list), matching the semantic of the old Providers-tab dropdown item. */}
+      {!isError && enabled && keys.length > 0 && (
+        <div className="mt-4 border-t pt-3">
+          <p className="text-xs font-medium mb-2">{t('keys.routeViaProxy')}</p>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {[...PLATFORMS, CUSTOM_GROUP]
+              .filter(p => keys.some(k => k.platform === p.value))
+              .map(p => {
+                const routed = !(data?.bypassPlatforms ?? []).includes(p.value)
+                return (
+                  <label key={p.value} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="min-w-0 truncate">{p.label}</span>
+                    <Switch
+                      size="sm"
+                      checked={routed}
+                      disabled={saveProxy.isPending || !data}
+                      onCheckedChange={(checked) => {
+                        const next = checked
+                          ? (data?.bypassPlatforms ?? []).filter(x => x !== p.value)
+                          : [...(data?.bypassPlatforms ?? []), p.value]
+                        saveProxy.mutate({ bypassPlatforms: next })
+                      }}
+                    />
+                  </label>
+                )
+              })}
+          </div>
+        </div>
       )}
 
       <div className="mt-3 text-[11px] text-muted-foreground">

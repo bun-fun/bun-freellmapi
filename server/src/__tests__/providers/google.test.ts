@@ -579,6 +579,51 @@ describe('GoogleProvider', () => {
     expect(assistantEntry.parts[0].functionCall.id).toBe('toolu_rewritten_by_bridge');
   });
 
+  it('falls back to Google\'s documented dummy sentinel when no signature exists', async () => {
+    // Signature-less replay — history this proxy never produced (another
+    // provider, a restart, TTL expiry). Gemini 3 400s on a MISSING signature
+    // and only accepts its two documented sentinel strings as a substitute;
+    // a fabricated value (e.g. a hash) is not one of them.
+    let capturedBody: any;
+    vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      capturedBody = JSON.parse((init as any).body);
+      return {
+        ok: true,
+        json: () => Promise.resolve({
+          candidates: [{
+            content: { parts: [{ text: 'ok' }] },
+            finishReason: 'STOP',
+          }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+        }),
+      } as any;
+    });
+
+    await provider.chatCompletion(
+      'test-key',
+      [
+        { role: 'user', content: 'Weather in Nairobi?' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'call_sentinel_fallback',
+            type: 'function',
+            // Unique name/args: nothing in the module-level signature cache
+            // can match, so the fallback path is exercised for real.
+            function: { name: 'get_weather_sentinel', arguments: '{"city":"Nairobi"}' },
+          }],
+        },
+        { role: 'tool', tool_call_id: 'call_sentinel_fallback', content: '{"temp": 21}' },
+      ],
+      'gemini-3-pro-preview',
+    );
+
+    const assistantEntry = capturedBody.contents.find((c: any) => c.role === 'model');
+    expect(assistantEntry.parts[0].thoughtSignature).toBe('context_engineering_is_the_way_to_go');
+    expect(assistantEntry.parts[0].functionCall.name).toBe('get_weather_sentinel');
+  });
+
   // ── Streaming ──────────────────────────────────────────────────────────────
   // Build a Response-shaped object backed by a ReadableStream so the provider's
   // `res.body.getReader()` path executes for real (Node 20+ has both globally).

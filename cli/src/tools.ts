@@ -14,7 +14,13 @@ function v1Url(url: string): string {
   return `${rootUrl(url)}/v1`;
 }
 
-function primaryModel(models: CatalogModel[]): CatalogModel {
+function primaryModel(models: CatalogModel[], requestedId?: string): CatalogModel {
+  // An explicit --model wins over every heuristic below. It is validated
+  // against the UNFILTERED catalog before we get here, so an id absent from
+  // `models` (the available-only roster) is a real, registered model that is
+  // merely out of quota right now — pin it anyway rather than silently writing
+  // a different model into the user's config.
+  if (requestedId) return models.find(model => model.id === requestedId) ?? { id: requestedId };
   // `auto` — the router picking the best model per request — is the whole
   // point of the gateway and the right default for a generated config. Never
   // fall back to `fusion` (multi-model fan-out) by accident.
@@ -44,7 +50,7 @@ function yamlString(value: string): string {
 }
 
 function claude(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   const directory = ctx.profile === 'default'
     ? path.join(ctx.homeDir, '.claude')
     : path.join(ctx.homeDir, '.claude', 'profiles', ctx.profile);
@@ -76,7 +82,7 @@ function claude(ctx: GenerateContext): Generation {
 }
 
 function codex(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   const compact = Math.max(16_000, Math.floor(contextWindow(model) * 0.9));
   const providerTable = [
     '[model_providers.freellmapi]',
@@ -129,7 +135,7 @@ function codex(ctx: GenerateContext): Generation {
 }
 
 function cline(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   return {
     files: [{
       path: path.join(ctx.homeDir, '.cline', 'data', 'settings', 'providers.json'),
@@ -163,7 +169,7 @@ function cline(ctx: GenerateContext): Generation {
 }
 
 function continueDev(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   return {
     files: [{
       path: path.join(ctx.homeDir, '.continue', 'config.yaml'),
@@ -192,7 +198,7 @@ function continueDev(ctx: GenerateContext): Generation {
 }
 
 function aider(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   return {
     files: [{
       path: path.join(ctx.homeDir, '.aider.conf.yml'),
@@ -244,7 +250,7 @@ function opencode(ctx: GenerateContext): Generation {
 }
 
 function goose(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   const models = catalogModels(ctx.models).map(entry => ({
     name: entry.id,
     context_limit: contextWindow(entry),
@@ -291,7 +297,7 @@ function goose(ctx: GenerateContext): Generation {
 }
 
 function qwen(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   const dir = path.join(ctx.homeDir, '.qwen');
   const models = catalogModels(ctx.models).map(entry => ({
     id: entry.id,
@@ -332,7 +338,7 @@ function qwen(ctx: GenerateContext): Generation {
 }
 
 function roo(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   const importPath = path.join(ctx.homeDir, '.roo', 'freellmapi.json');
   return {
     files: [{
@@ -359,7 +365,7 @@ function roo(ctx: GenerateContext): Generation {
 }
 
 function kilo(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   const models = Object.fromEntries(catalogModels(ctx.models).map(entry => [
     entry.id,
     {
@@ -443,7 +449,7 @@ function cursor(ctx: GenerateContext): Generation {
 }
 
 function generic(ctx: GenerateContext): Generation {
-  const model = primaryModel(ctx.models);
+  const model = primaryModel(ctx.models, ctx.requestedModelId);
   return {
     files: [],
     notes: [

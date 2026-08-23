@@ -51,6 +51,41 @@ its keys, so run `npm run check:i18n` from `client/` before opening a PR. See
 [docs/translating.md](docs/translating.md) for the full rules and the settled Chinese
 terminology.
 
+## Commit checklist hook
+
+Optional, and off by default. If you use [Claude Code](https://claude.com/claude-code), the repo
+ships a hook that reads this file and reminds the agent to check its diff against the rules above
+before it runs `git commit` or `git push`. It reminds; it does not block.
+
+See what it would say without enabling anything:
+
+```bash
+node .claude/hooks/contributing-check.mjs --preview
+```
+
+To turn it on, add this to your own `.claude/settings.local.json` — nothing is wired up for you:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/contributing-check.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+This file is parsed when the hook fires, so editing the rules above changes what the agent is told
+with no regeneration step.
+
 ## AI and LLM-assisted contributions
 
 LLM-assisted PRs are welcome. A lot of this codebase is itself built that way, so there is no stigma here. The bar is the same as for any other PR: you are responsible for what you submit.

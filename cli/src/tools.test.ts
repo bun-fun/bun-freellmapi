@@ -49,6 +49,24 @@ describe('tool generators', () => {
     });
   }
 
+  it('honours an explicit --model instead of the default-model heuristic', () => {
+    // `--model` was parsed into CliOptions and then dropped: it never reached
+    // GenerateContext, so `setup-claude --model X` wrote whatever
+    // primaryModel() preferred and said nothing about ignoring the flag.
+    const pinned = { ...context, requestedModelId: 'reasoning-model' };
+    const claude = tools.find(tool => tool.id === 'claude')!.generate(pinned);
+    expect(JSON.stringify(claude.files)).toContain('reasoning-model');
+  });
+
+  it('pins a requested model that the available-roster does not carry', () => {
+    // Validated against the UNFILTERED catalog upstream, so an id missing from
+    // ctx.models here is registered-but-out-of-quota, not a typo. Writing a
+    // different model into the user's config would be the wrong repair.
+    const pinned = { ...context, requestedModelId: 'benched-model' };
+    const claude = tools.find(tool => tool.id === 'claude')!.generate(pinned);
+    expect(JSON.stringify(claude.files)).toContain('benched-model');
+  });
+
   it('setup-codex with a named profile has stable golden output', () => {
     const generation = tools.find(tool => tool.id === 'codex')!
       .generate({ ...context, profile: 'work' });

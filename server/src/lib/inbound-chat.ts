@@ -41,7 +41,7 @@ import {
   startsWithDialectMarker,
 } from './tool-call-rescue.js';
 import { sanitizeProviderErrorMessage } from './error-redaction.js';
-import { newClientAbortError } from './error-classify.js';
+import { newClientAbortError, isUpstreamClassificationOutput } from './error-classify.js';
 import { logRequest } from './request-log.js';
 import { getStickyModel, setStickyModel } from '../routes/proxy.js';
 import type { CompletionOptions } from '../providers/base.js';
@@ -259,6 +259,15 @@ export async function runInboundChat(
             result.choices?.[0]?.finish_reason === 'length' ? { skipBench: true } : {},
           );
         }
+        // #809: a bare "safe"/"unsafe" classification word from a relay is an
+        // upstream filter, not the requested model — fail over like an empty
+        // completion.
+        if (isUpstreamClassificationOutput(text, route.platform) && toolCalls.length === 0) {
+          throw Object.assign(
+            new Error(`empty completion from ${route.displayName} (upstream classification output)`),
+            result.choices?.[0]?.finish_reason === 'length' ? { skipBench: true } : {},
+          );
+        }
         if (wantsTools && text && toolCalls.length === 0) {
           const rescue = rescueInlineToolCalls(
             text,
@@ -461,6 +470,16 @@ export async function runInboundChat(
           if (clientGone) return 'committed';
           throw Object.assign(
             new Error(`empty completion from ${route.displayName}`),
+            finishReason === 'length' ? { skipBench: true } : {},
+          );
+        }
+        // #809: bare "safe"/"unsafe" classification output from a relay is an
+        // upstream filter, not the requested model — fail over like an empty
+        // completion.
+        if (isUpstreamClassificationOutput(text, route.platform) && toolCalls.length === 0) {
+          if (clientGone) return 'committed';
+          throw Object.assign(
+            new Error(`empty completion from ${route.displayName} (upstream classification output)`),
             finishReason === 'length' ? { skipBench: true } : {},
           );
         }

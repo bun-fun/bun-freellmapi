@@ -10,7 +10,18 @@ import { FieldError } from '@/components/ui/field-error'
 import type { ApiKey, Platform } from '../../../../shared/types'
 import { useI18n } from '@/i18n'
 import { toast } from '@/lib/toast'
+import type { FallbackEntry } from '@/lib/routing'
+import { scopeCandidates, shouldOfferModelPicker, type ScopeCandidate } from '@/lib/model-scope-selection'
 import { GetKeyLink, PLATFORMS } from './shared'
+
+/** A key that just landed, plus the models the picker should offer for it.
+ *  Only produced when the picker is actually worth showing (#657) — otherwise
+ *  the add stays as silent as it has always been. */
+export interface AddedKeyScopeOffer {
+  keyId: number
+  platformLabel: string
+  candidates: ScopeCandidate[]
+}
 
 // The "Provider key" pane of the Add key dialog: paste a credential for a known
 // provider. Extracted verbatim from the old inline KeysPage form so all field
@@ -19,7 +30,10 @@ import { GetKeyLink, PLATFORMS } from './shared'
 // `initialPlatform` preselects the provider (checklist-chip entry); the field
 // stays editable. The dialog remounts this pane per open, so a plain initial
 // state is enough.
-export function AddKeyForm({ onSuccess, initialPlatform }: { onSuccess: () => void; initialPlatform?: Platform }) {
+//
+// `onSuccess` may carry a scope offer for the key that was just added; the
+// dialog owns that follow-up because this pane unmounts the moment it closes.
+export function AddKeyForm({ onSuccess, initialPlatform }: { onSuccess: (offer?: AddedKeyScopeOffer) => void; initialPlatform?: Platform }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [platform, setPlatform] = useState<Platform | ''>(initialPlatform ?? '')
@@ -47,6 +61,32 @@ export function AddKeyForm({ onSuccess, initialPlatform }: { onSuccess: () => vo
   const addedPlatforms = useMemo(() => new Set(keys.map(k => k.platform)), [keys])
   const [hideAdded, setHideAdded] = useState(false)
 
+  // #657 post-add scope picker: the platform's model list. This is the same
+  // ['fallback'] query the Models page, the fallback chain and the command
+  // palette already run — react-query dedupes it, so opening this pane costs at
+  // most one GET that the rest of the dashboard was going to make anyway. That
+  // is why the picker needs no new endpoint and no widening of POST /api/keys
+  // (whose response only carries a model COUNT, not the ids). An empty or
+  // still-loading list simply means no picker, which is the old behaviour.
+  const { data: catalog = [] } = useQuery<FallbackEntry[]>({
+    queryKey: ['fallback'],
+    queryFn: () => apiFetch('/api/fallback'),
+  })
+
+  // Whether the key that just landed is worth offering the picker for, and the
+  // rows to offer. Anything missing — no id back, a keyless sentinel, a catalog
+  // too small or not loaded — returns undefined, and the add stays silent.
+  function scopeOffer(keyId: number | undefined, added: string): AddedKeyScopeOffer | undefined {
+    if (typeof keyId !== 'number') return undefined
+    const provider = PLATFORMS.find(p => p.value === added)
+    // Keyless gateways are excluded from scope editing on the key row too — no
+    // credential means nothing was bought per model group.
+    if (!provider || provider.keyless) return undefined
+    const candidates = scopeCandidates(catalog, added)
+    if (!shouldOfferModelPicker(candidates)) return undefined
+    return { keyId, platformLabel: provider.label, candidates }
+  }
+
   const platformOptions = useMemo(
     () => PLATFORMS
       // The selected provider always stays listed, so hiding added ones never
@@ -63,8 +103,8 @@ export function AddKeyForm({ onSuccess, initialPlatform }: { onSuccess: () => vo
   const addKey = useMutation({
     meta: { silenceToast: true },
     mutationFn: (body: { platform: string; key: string; label?: string }) =>
-      apiFetch<{ notice?: string | null }>('/api/keys', { method: 'POST', body: JSON.stringify(body) }),
-    onSuccess: (data) => {
+      apiFetch<{ id: number; notice?: string | null }>('/api/keys', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['keys'] })
       queryClient.invalidateQueries({ queryKey: ['health'] })
       queryClient.invalidateQueries({ queryKey: ['fallback'] })
@@ -74,7 +114,7 @@ export function AddKeyForm({ onSuccess, initialPlatform }: { onSuccess: () => vo
       // current catalog tier yet (#438) — surfaced as a toast now that the
       // dialog closes on success.
       if (data?.notice) toast.info(data.notice)
-      onSuccess()
+      onSuccess(scopeOffer(data?.id, variables.platform))
     },
   })
 

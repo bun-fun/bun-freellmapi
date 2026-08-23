@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ChevronDown, Clock3, Gauge } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, ChevronDown, Clock3, Gauge, RefreshCcw } from 'lucide-react'
 import { useI18n } from '@/i18n'
 import { apiFetch } from '@/lib/api'
 
@@ -88,6 +88,19 @@ export function PenaltyInspector() {
     queryFn: () => apiFetch('/api/fallback/penalty-inspector'),
     refetchInterval: 5_000,
   })
+  const queryClient = useQueryClient()
+
+  // #878: an escalated cooldown can bench a key for up to 24h off one bad
+  // window; once the operator has fixed the cause (proxy, region, quota) the
+  // only way back was waiting — offer a manual lift on the spot.
+  const resetCooldown = useMutation({
+    mutationFn: (keyId: number) =>
+      apiFetch(`/api/keys/${keyId}/cooldowns`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['fallback', 'penalty-inspector'] })
+      queryClient.invalidateQueries({ queryKey: ['keys'] })
+    },
+  })
 
   const rows = data?.rows ?? []
   if (rows.length === 0) return null
@@ -167,11 +180,21 @@ export function PenaltyInspector() {
                 {row.cooldowns.length === 0 ? (
                   <span className="text-muted-foreground">{t('penaltyInspector.noCooldown')}</span>
                 ) : row.cooldowns.map(cooldown => (
-                  <span key={`${cooldown.keyId}:${cooldown.expiresAtMs}`} className="rounded-full bg-sky-600/15 px-2 py-0.5 text-sky-700 dark:text-sky-400">
+                  <span key={`${cooldown.keyId}:${cooldown.expiresAtMs}`} className="inline-flex items-center gap-1 rounded-full bg-sky-600/15 px-2 py-0.5 text-sky-700 dark:text-sky-400">
                     {t('penaltyInspector.cooldownChip', {
                       key: cooldown.keyLabel || `#${cooldown.keyId}`,
                       time: formatDuration(cooldown.expiresInMs),
                     })}
+                    <button
+                      type="button"
+                      onClick={() => resetCooldown.mutate(cooldown.keyId)}
+                      disabled={resetCooldown.isPending}
+                      aria-label={t('penaltyInspector.resetCooldown')}
+                      title={t('penaltyInspector.resetCooldown')}
+                      className="rounded-full p-0.5 transition-colors hover:bg-sky-700/20 disabled:opacity-50"
+                    >
+                      <RefreshCcw className="size-3" />
+                    </button>
                   </span>
                 ))}
               </div>

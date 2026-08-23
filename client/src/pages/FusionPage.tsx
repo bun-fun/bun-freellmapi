@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Check, Layers } from 'lucide-react'
+import { Check, Layers, Search } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { buildModelOptions } from '@/lib/model-groups'
+import { filterFusionModels, fusionProviders } from '@/lib/fusion-filter'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -40,6 +41,7 @@ interface FallbackEntry {
 }
 
 const JUDGE_AUTO = '__auto__'
+const PROVIDER_ALL = '__all__'
 
 export default function FusionPage() {
   const { t } = useI18n()
@@ -76,6 +78,16 @@ export default function FusionPage() {
   const [k, setK] = useState<number>(4)
   const [strategy, setStrategy] = useState<Strategy>('synthesize')
   const [exposePanel, setExposePanel] = useState<boolean>(false)
+  const [panelQuery, setPanelQuery] = useState('')
+  const [panelProvider, setPanelProvider] = useState<string>(PROVIDER_ALL)
+
+  // Issue #872: the explicit panel can list hundreds of models, so support a
+  // free-text search and a provider filter before showing the rows.
+  const panelProviders = useMemo(() => fusionProviders(modelOptions), [modelOptions])
+  const visibleModels = useMemo(
+    () => filterFusionModels(modelOptions, panelQuery, panelProvider === PROVIDER_ALL ? null : panelProvider),
+    [modelOptions, panelQuery, panelProvider],
+  )
 
   // Hydrate local state from the server once it loads.
   useEffect(() => {
@@ -165,34 +177,65 @@ export default function FusionPage() {
               {modelOptions.length === 0 ? (
                 <p className="text-xs text-muted-foreground">{t('fusion.noModels')}</p>
               ) : (
-                <div className="max-h-80 overflow-y-auto rounded-xl border divide-y">
-                  {modelOptions.map(o => {
-                    const selected = models.includes(o.value)
-                    const atCap = !selected && models.length >= maxK
-                    return (
-                      <button
-                        key={o.value}
-                        type="button"
-                        disabled={atCap}
-                        onClick={() => toggleModel(o.value)}
-                        className={`flex w-full items-center gap-3 px-3 py-2 text-left transition-colors ${
-                          selected ? 'bg-muted/50' : atCap ? 'opacity-40' : 'hover:bg-muted/30'
-                        }`}
-                      >
-                        <span className={`flex size-4 items-center justify-center rounded border ${selected ? 'bg-foreground text-background' : ''}`}>
-                          {selected && <Check className="size-3" />}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="text-sm font-medium">{o.label}</span>
-                          <span className="ml-2 font-mono text-[11px] text-muted-foreground">{o.value}</span>
-                        </span>
-                        <Badge variant="secondary" className="text-[10px]">
-                          {o.providerCount > 1 ? t('models.providerCount', { count: o.providerCount }) : o.platform}
-                        </Badge>
-                      </button>
-                    )
-                  })}
-                </div>
+                <>
+                  {/* Issue #872: search + provider filter over a long model list. */}
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={panelQuery}
+                        onChange={e => setPanelQuery(e.target.value)}
+                        placeholder={t('fusion.searchPlaceholder')}
+                        className="pl-8"
+                      />
+                    </div>
+                    <Select value={panelProvider} onValueChange={v => setPanelProvider(v ?? PROVIDER_ALL)}>
+                      <SelectTrigger className="w-44 shrink-0" aria-label={t('fusion.providerFilterLabel')}>
+                        <SelectValue>
+                          {(v: string) => v === PROVIDER_ALL
+                            ? t('fusion.providerAll')
+                            : (panelProviders.find(p => p === v) ?? v)}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={PROVIDER_ALL}>{t('fusion.providerAll')}</SelectItem>
+                        {panelProviders.map(p => (
+                          <SelectItem key={p} value={p}>{p}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="max-h-80 overflow-y-auto rounded-xl border divide-y">
+                    {visibleModels.length === 0 ? (
+                      <p className="px-3 py-6 text-center text-xs text-muted-foreground">{t('fusion.noMatch')}</p>
+                    ) : visibleModels.map(o => {
+                      const selected = models.includes(o.value)
+                      const atCap = !selected && models.length >= maxK
+                      return (
+                        <button
+                          key={o.value}
+                          type="button"
+                          disabled={atCap}
+                          onClick={() => toggleModel(o.value)}
+                          className={`flex w-full items-center gap-3 px-3 py-2 text-left transition-colors ${
+                            selected ? 'bg-muted/50' : atCap ? 'opacity-40' : 'hover:bg-muted/30'
+                          }`}
+                        >
+                          <span className={`flex size-4 items-center justify-center rounded border ${selected ? 'bg-foreground text-background' : ''}`}>
+                            {selected && <Check className="size-3" />}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="text-sm font-medium">{o.label}</span>
+                            <span className="ml-2 font-mono text-[11px] text-muted-foreground">{o.value}</span>
+                          </span>
+                          <Badge variant="secondary" className="text-[10px]">
+                            {o.providerCount > 1 ? t('models.providerCount', { count: o.providerCount }) : o.platform}
+                          </Badge>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
               )}
             </section>
           )}

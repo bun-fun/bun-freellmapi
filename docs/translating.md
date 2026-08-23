@@ -41,6 +41,8 @@ reference product, or a real ambiguity in the current wording.
 | Revoke | 撤销 | Not 废除, which is closer to repealing a law. |
 | Playground | 试验台 | It is a bench for testing models. Not 试玩台, where 试玩 suggests a game demo. |
 | Balance (the custom preset) | 权衡 | The numeric sliders themselves are 权重. |
+| you (second person) | 您 | Not 你. Settled in [#723](https://github.com/tashfeenahmed/freellmapi/pull/723) by unifying all 19 mixed keys; the file had been switching register mid-sentence. Dropping the pronoun entirely is still better where the sentence reads naturally without it. |
+| English (the UI language) | 英文 | Not 英语. 语 is the spoken tongue; an interface toggle is about written text, and its sibling label is 中文. |
 
 The strategy presets are comparative, so they keep 最: 最快, 最稳定, 最智能.
 

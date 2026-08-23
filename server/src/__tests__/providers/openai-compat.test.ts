@@ -498,6 +498,8 @@ describe('OpenAICompatProvider - platform instances', () => {
   const platforms = [
     { platform: 'groq',       name: 'Groq',          baseUrl: 'https://api.groq.com/openai/v1' },
     { platform: 'cerebras',   name: 'Cerebras',      baseUrl: 'https://api.cerebras.ai/v1' },
+    { platform: 'bai',        name: 'B.AI',          baseUrl: 'https://api.b.ai/v1' },
+    { platform: 'anyapi',     name: 'AnyAPI',        baseUrl: 'https://api.anyapi.ai/v1' },
     { platform: 'nvidia',     name: 'NVIDIA NIM',    baseUrl: 'https://integrate.api.nvidia.com/v1' },
     { platform: 'mistral',    name: 'Mistral',       baseUrl: 'https://api.mistral.ai/v1' },
     { platform: 'openrouter', name: 'OpenRouter',    baseUrl: 'https://openrouter.ai/api/v1' },
@@ -513,6 +515,7 @@ describe('OpenAICompatProvider - platform instances', () => {
     { platform: 'navy',       name: 'NavyAI',        baseUrl: 'https://api.navy/v1' },
     { platform: 'nara',       name: 'NaraRouter',    baseUrl: 'https://router.bynara.id/v1' },
     { platform: 'sealion',    name: 'SEA-LION',      baseUrl: 'https://api.sea-lion.ai/v1' },
+    { platform: 'orcarouter', name: 'OrcaRouter',    baseUrl: 'https://api.orcarouter.ai/v1' },
     // modelscope registers a ModelScopeProvider subclass (custom validateKey,
     // see providers/modelscope.test.ts) but chat routing is stock openai-compat.
     { platform: 'modelscope', name: 'ModelScope',    baseUrl: 'https://api-inference.modelscope.cn/v1' },
@@ -621,6 +624,44 @@ describe('OpenAICompatProvider - platform instances', () => {
       expect(calls.length).toBe(1);
       expect(calls[0].function.name).toBe('read');
       expect(chunks.some(c => c.choices[0].finish_reason === 'tool_calls')).toBe(true);
+    });
+
+    // The rescue turns a provider 400 into a success. If what it recovered does
+    // not satisfy the tool's schema, that success is one the client cannot use —
+    // so with the opt-in verdict on, decline the rescue and let the original
+    // error propagate, exactly as it did before #264.
+    it('declines the rescue when the recovered arguments violate the schema', async () => {
+      process.env.VALIDATE_TOOL_ARGUMENTS = '1';
+      try {
+        vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+          ok: false, status: 400, statusText: 'Bad Request',
+          json: () => Promise.resolve({
+            ...failBody,
+            error: { ...failBody.error, failed_generation: '<function=read={"nope": "sample.txt"}</function>' },
+          }),
+        } as any);
+
+        await expect(
+          provider.chatCompletion('key', [{ role: 'user', content: 'read sample.txt' }], 'llama-3.3-70b-versatile', { tools, tool_choice: 'auto' }),
+        ).rejects.toThrow(/API error 400/);
+      } finally {
+        delete process.env.VALIDATE_TOOL_ARGUMENTS;
+      }
+    });
+
+    it('still rescues schema-valid arguments while the verdict is on', async () => {
+      process.env.VALIDATE_TOOL_ARGUMENTS = '1';
+      try {
+        vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+          ok: false, status: 400, statusText: 'Bad Request',
+          json: () => Promise.resolve(failBody),
+        } as any);
+
+        const r = await provider.chatCompletion('key', [{ role: 'user', content: 'read sample.txt' }], 'llama-3.3-70b-versatile', { tools, tool_choice: 'auto' });
+        expect(JSON.parse(r.choices[0].message.tool_calls![0].function.arguments)).toEqual({ file_path: 'sample.txt' });
+      } finally {
+        delete process.env.VALIDATE_TOOL_ARGUMENTS;
+      }
     });
 
     it('still throws when there is no failed_generation to rescue', async () => {

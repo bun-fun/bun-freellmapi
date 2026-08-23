@@ -22,11 +22,18 @@ function addCustomKey(baseUrl: string, raw = 'custom-media-key'): number {
   return Number(row.lastInsertRowid);
 }
 
-function addMedia(platform: string, modelId: string, modality: 'image' | 'audio', priority = 1, keyId: number | null = null) {
+function addMedia(
+  platform: string,
+  modelId: string,
+  modality: 'image' | 'audio',
+  priority = 1,
+  keyId: number | null = null,
+  metaJson: string | null = null,
+) {
   getDb().prepare(`
-    INSERT INTO media_models (platform, model_id, display_name, modality, priority, enabled, quota_label, key_id)
-    VALUES (?, ?, ?, ?, ?, 1, '', ?)
-  `).run(platform, modelId, modelId, modality, priority, keyId);
+    INSERT INTO media_models (platform, model_id, display_name, modality, priority, enabled, quota_label, key_id, meta_json)
+    VALUES (?, ?, ?, ?, ?, 1, '', ?, ?)
+  `).run(platform, modelId, modelId, modality, priority, keyId, metaJson);
 }
 
 function jsonResponse(body: unknown) {
@@ -61,6 +68,46 @@ describe('media service', () => {
       expect(r.images[0].b64_json).toBe('AAAA');
     });
 
+    it('NVIDIA FLUX.1 Dev: sends the validated 28-step 1024x1024 payload', async () => {
+      addMedia('nvidia', 'black-forest-labs/flux.1-dev', 'image');
+      addKey('nvidia');
+      const fetchMock = vi.fn(async () => jsonResponse({ artifacts: [{ base64: 'DEV' }] }));
+      globalThis.fetch = fetchMock as any;
+
+      await runImageGeneration('black-forest-labs/flux.1-dev', {
+        prompt: 'a lighthouse',
+        size: '512x512',
+      });
+
+      const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+      expect(body).toEqual({
+        prompt: 'a lighthouse',
+        mode: 'base',
+        steps: 28,
+        width: 1024,
+        height: 1024,
+        cfg_scale: 3.5,
+      });
+    });
+
+    it('NVIDIA FLUX.2 Klein 4B: omits unsupported mode and guidance fields', async () => {
+      addMedia('nvidia', 'black-forest-labs/flux.2-klein-4b', 'image');
+      addKey('nvidia');
+      const fetchMock = vi.fn(async () => jsonResponse({ artifacts: [{ base64: 'KLEIN' }] }));
+      globalThis.fetch = fetchMock as any;
+
+      await runImageGeneration('black-forest-labs/flux.2-klein-4b', {
+        prompt: 'a red kite',
+        size: '512x512',
+      });
+
+      const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+      expect(body).toEqual({ prompt: 'a red kite', steps: 4, width: 1024, height: 1024 });
+      expect(body).not.toHaveProperty('mode');
+      expect(body).not.toHaveProperty('guidance');
+      expect(body).not.toHaveProperty('cfg_scale');
+    });
+
     it('Pollinations: keyless GET, raw bytes → b64_json (no api key needed)', async () => {
       addMedia('pollinations', 'flux', 'image');
       globalThis.fetch = vi.fn(async () =>
@@ -70,12 +117,37 @@ describe('media service', () => {
       expect(r.images[0].b64_json).toBe(Buffer.from('PNGDATA').toString('base64'));
     });
 
-    it('Cloudflare: JSON {result.image} → b64_json', async () => {
+    it('Cloudflare FLUX.1 Schnell: sends only the prompt and maps result.image', async () => {
       addMedia('cloudflare', '@cf/black-forest-labs/flux-1-schnell', 'image');
       addKey('cloudflare', 'acct123:token456');
-      globalThis.fetch = vi.fn(async () => jsonResponse({ result: { image: 'CFB64' }, success: true })) as any;
+      const fetchMock = vi.fn(async () => jsonResponse({ result: { image: 'CFB64' }, success: true }));
+      globalThis.fetch = fetchMock as any;
       const r = await runImageGeneration('@cf/black-forest-labs/flux-1-schnell', { prompt: 'x' });
       expect(r.images[0].b64_json).toBe('CFB64');
+      const init = fetchMock.mock.calls[0][1] as RequestInit;
+      expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+      expect(JSON.parse(String(init.body))).toEqual({ prompt: 'x' });
+    });
+
+    it('Cloudflare: requestStyle multipart sends form-data (FLUX.2 rejects JSON)', async () => {
+      addMedia('cloudflare', '@cf/black-forest-labs/flux-2-klein-4b', 'image', 1, null,
+        JSON.stringify({ requestStyle: 'multipart' }));
+      addKey('cloudflare', 'acct123:token456');
+      const fetchMock = vi.fn(async () => jsonResponse({ result: { image: 'KLEINB64' }, success: true }));
+      globalThis.fetch = fetchMock as any;
+      const r = await runImageGeneration('@cf/black-forest-labs/flux-2-klein-4b', {
+        prompt: 'a small blue square',
+        size: '512x512',
+      });
+      expect(r.images[0].b64_json).toBe('KLEINB64');
+      const init = fetchMock.mock.calls[0][1] as RequestInit;
+      expect(init.body).toBeInstanceOf(FormData);
+      const form = init.body as FormData;
+      expect(form.get('prompt')).toBe('a small blue square');
+      expect(form.get('width')).toBe('512');
+      expect(form.get('height')).toBe('512');
+      // Content-Type must stay unset so fetch supplies the multipart boundary.
+      expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
     });
 
     it('Cloudflare: binary SDXL response → b64_json', async () => {
