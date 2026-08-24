@@ -876,11 +876,43 @@ function ensureAdminUser(db: DatabaseType) {
   const hasEmailCol = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[])
     .some(c => c.name === 'email');
 
+  // Repair installs created while the email-shape branch derived the hash
+  // with a discarded random salt: no password could ever verify against it,
+  // locking dashboard login and key-export reauth on those databases (#687).
+  // The plaintext still lives in settings.admin_password, so re-derive.
+  if (hasEmailCol && exists) {
+    const broken = db.prepare(
+      'SELECT id FROM users WHERE email = ? AND salt IS NULL LIMIT 1',
+    ).get('admin@example.com') as { id: number } | undefined;
+    if (broken) {
+      const storedPw = db.prepare("SELECT value FROM settings WHERE key = 'admin_password'")
+        .get() as { value?: string } | undefined;
+      if (storedPw?.value) {
+        const repairSalt = crypto.randomBytes(16).toString('hex');
+        const repairHash = crypto.pbkdf2Sync(storedPw.value, repairSalt, 100000, 64, 'sha512').toString('hex');
+        db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?')
+          .run(repairHash, repairSalt, broken.id);
+        console.log('\n  Repaired admin credentials (missing salt on legacy row):');
+      } else {
+        // No plaintext to recover from — mint a verifiable one so login
+        // works again instead of leaving an unmatchable hash in place.
+        password = `${crypto.randomBytes(4).toString('hex')}-${crypto.randomBytes(4).toString('hex')}`;
+        const repairSalt = crypto.randomBytes(16).toString('hex');
+        const repairHash = crypto.pbkdf2Sync(password, repairSalt, 100000, 64, 'sha512').toString('hex');
+        db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?')
+          .run(repairHash, repairSalt, broken.id);
+        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)").run(password);
+        console.log('\n  Admin password regenerated:');
+      }
+    }
+  }
+
   if (!exists) {
     password = envPassword || `${crypto.randomBytes(3).toString('hex')}-${crypto.randomBytes(3).toString('hex')}`;
     if (hasEmailCol) {
-      const hash = crypto.pbkdf2Sync(password, crypto.randomBytes(16).toString('hex'), 100000, 64, 'sha512').toString('hex');
-      db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('admin@example.com', hash);
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+      db.prepare('INSERT INTO users (email, password_hash, salt) VALUES (?, ?, ?)').run('admin@example.com', hash, salt);
     } else {
       const salt = crypto.randomBytes(16).toString('hex');
       const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
@@ -895,7 +927,7 @@ function ensureAdminUser(db: DatabaseType) {
       const salt = crypto.randomBytes(16).toString('hex');
       const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
       if (hasEmailCol) {
-        db.prepare('UPDATE users SET password_hash = ? WHERE email = ?').run(hash, 'admin@example.com');
+        db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE email = ?').run(hash, salt, 'admin@example.com');
       } else {
         db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE username = ?').run(hash, salt, 'admin');
       }
@@ -913,7 +945,7 @@ function ensureAdminUser(db: DatabaseType) {
       const salt = crypto.randomBytes(16).toString('hex');
       const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
       if (hasEmailCol) {
-        db.prepare('UPDATE users SET password_hash = ? WHERE email = ?').run(hash, 'admin@example.com');
+        db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE email = ?').run(hash, salt, 'admin@example.com');
       } else {
         db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE username = ?').run(hash, salt, 'admin');
       }

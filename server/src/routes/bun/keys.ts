@@ -8,7 +8,7 @@ import { resolveCustomEndpointKey, customEndpointKeyIds } from '../../services/c
 import { normalizeBaseUrl } from '../../lib/endpoint-scope.js';
 import { assessProviderUrl } from '../../lib/url-guard.js';
 import { discoverEndpointModels, probeEndpointModel, ModelDiscoveryError } from '../../services/model-discovery.js';
-import { clearCooldownsForKey } from '../../services/ratelimit.js';
+import { clearCooldownsForKey, getActiveCooldownsForKeys } from '../../services/ratelimit.js';
 import { registerCustomChatModels, type CustomModelEntry } from '../../services/custom-model-register.js';
 import { probeEmbeddingDimensions, registerCustomEmbeddingModel } from '../../services/embeddings.js';
 import { parseKeysFromFile, stripTrailingCommas, stripJsoncComments } from '../../lib/key-parser.js';
@@ -52,6 +52,21 @@ function enabledModelCount(db: ReturnType<typeof getDb>, platform: string): numb
     'SELECT COUNT(*) AS c FROM models WHERE platform = ? AND enabled = 1',
   ).get(platform) as { c: number };
   return row.c;
+}
+
+/**
+ * Whether a stored row belongs in an export file. Kept in one place because
+ * the export dialog shows a count before downloading, and computing that
+ * count from a different rule than the export itself made it lie (#687).
+ *
+ * A custom endpoint is worth exporting even when it holds only the `no-key`
+ * placeholder — the endpoint IS the thing being backed up, and its base_url
+ * restores it. Anything else needs a real secret to be worth a line.
+ */
+function isExportableKey(row: { platform: string; baseUrl: string | null; key: string }): boolean {
+  if (row.platform === 'custom') return Boolean(row.baseUrl);
+  const v = row.key.trim();
+  return v.length > 0 && v !== 'no-key';
 }
 
 interface CustomEndpointRef {
@@ -263,23 +278,88 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
     const db = getDb();
     const rows = db.prepare('SELECT * FROM api_keys ORDER BY created_at DESC').all() as any[];
 
+    // Models attached to custom endpoints, grouped by ENDPOINT not by key row:
+    // an endpoint can hold several credentials (#619) and every one of them
+    // serves the endpoint's whole model list.
+    const customModels = [
+      ...db.prepare(`
+        SELECT key_id, id, 'chat' AS kind, model_id, display_name, NULL AS family
+          FROM models
+         WHERE platform = 'custom' AND key_id IS NOT NULL
+      `).all() as any[],
+      ...db.prepare(`
+        SELECT key_id, id, 'embedding' AS kind, model_id, display_name, family
+          FROM embedding_models
+         WHERE platform = 'custom' AND key_id IS NOT NULL
+      `).all() as any[],
+      ...db.prepare(`
+        SELECT key_id, id, modality AS kind, model_id, display_name, NULL AS family
+          FROM media_models
+         WHERE platform = 'custom' AND key_id IS NOT NULL
+      `).all() as any[],
+    ];
+    const endpointOfKey = new Map<number, string>();
+    for (const row of rows) {
+      if (row.platform === 'custom' && row.base_url) endpointOfKey.set(Number(row.id), row.base_url);
+    }
+    const endpointOf = (keyId: number) => endpointOfKey.get(keyId) ?? `key:${keyId}`;
+
+    const modelsByEndpoint = new Map<string, any[]>();
+    for (const m of customModels) {
+      const keyId = Number(m.key_id);
+      if (!Number.isInteger(keyId)) continue;
+      const list = modelsByEndpoint.get(endpointOf(keyId)) ?? [];
+      list.push({
+        id: m.id,
+        kind: m.kind,
+        modelId: m.model_id,
+        displayName: m.display_name,
+        family: m.family ?? null,
+      });
+      modelsByEndpoint.set(endpointOf(keyId), list);
+    }
+    for (const list of modelsByEndpoint.values()) {
+      list.sort((a, b) => {
+        const ka = ['chat', 'embedding', 'image', 'audio'].indexOf(a.kind);
+        const kb = ['chat', 'embedding', 'image', 'audio'].indexOf(b.kind);
+        return (ka - kb) || String(a.displayName).localeCompare(String(b.displayName));
+      });
+    }
+
+    // A cooling-down key reads as healthy and enabled while the router skips
+    // it, so surface the cooldowns that explain the idleness (#P0-7).
+    const cooldownsByKeyId = getActiveCooldownsForKeys(rows.map(row => Number(row.id)));
+
     const keys = rows.map(row => {
       let maskedKey = '****';
+      let realKey = '';
       try {
-        const realKey = decrypt(row.encrypted_key, row.iv, row.auth_tag);
+        realKey = decrypt(row.encrypted_key, row.iv, row.auth_tag);
         maskedKey = maskKey(realKey);
       } catch {
         maskedKey = '[decrypt failed]';
       }
+      const cooldowns = cooldownsByKeyId.get(Number(row.id)) ?? [];
       return {
         id: row.id,
         platform: row.platform,
         label: row.label,
         maskedKey,
+        baseUrl: row.base_url ?? null,
         status: row.status,
         enabled: row.enabled === 1,
+        keyless: resolveProvider(row.platform)?.keyless === true,
+        // Lets the export dialog count exactly what the export will write.
+        exportable: isExportableKey({ platform: row.platform, baseUrl: row.base_url ?? null, key: realKey }),
         createdAt: row.created_at,
         lastCheckedAt: row.last_checked_at,
+        lastHealthError: row.last_health_error ?? null,
+        models: row.platform === 'custom' ? (modelsByEndpoint.get(endpointOf(Number(row.id))) ?? []) : undefined,
+        cooldowns: cooldowns.map(c => ({
+          modelId: c.modelId,
+          expiresAtMs: c.expiresAtMs,
+          remainingMs: c.remainingMs,
+        })),
       };
     });
 
@@ -389,7 +469,9 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
 
     const rows = db.prepare(`SELECT * FROM api_keys ${whereClause} ORDER BY platform, created_at ASC`).all() as any[];
 
-    // Decrypt and filter — only export keys with a real value
+    // Decrypt and filter with the same rule the dialog counts by (#687):
+    // a custom endpoint exports even when it only holds the no-key sentinel,
+    // because its base_url is what restores it.
     const decryptedKeys = rows
       .map(row => {
         let key = '';
@@ -405,18 +487,34 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
           baseUrl: row.base_url || undefined,
         };
       })
-      .filter(k => {
-        const v = k.key.trim();
-        return v.length > 0 && v !== 'no-key';
-      });
+      .filter(k => isExportableKey({ platform: k.platform, baseUrl: k.baseUrl ?? null, key: k.key }));
 
     if (decryptedKeys.length === 0) {
       return jsonResponse({ error: { message: 'No keys to export' } }, 404);
     }
 
     if (format === 'env') {
+      // Names have to stay unique: a .env round trip reads back into a map
+      // keyed by name, so two rows sharing one name collapse into one key.
+      // Repeats take a numeric suffix (GOOGLE_KEY_2), which still resolves to
+      // the same platform through PREFIX_MAP.
+      //
+      // Custom endpoints get an indexed PAIR — a custom key without its
+      // base_url cannot be restored (#687).
+      const seenPerPlatform = new Map<string, number>();
+      let customIndex = 0;
       const lines = decryptedKeys.map(k => {
-        const envKey = `${k.platform.toUpperCase()}_KEY=${k.key}`;
+        if (k.platform === 'custom' && k.baseUrl) {
+          customIndex++;
+          return [
+            `# ${k.label || `custom endpoint ${customIndex}`}`,
+            `CUSTOM_${customIndex}_BASE_URL=${k.baseUrl}`,
+            `CUSTOM_${customIndex}_KEY=${k.key}`,
+          ].join('\n');
+        }
+        const n = (seenPerPlatform.get(k.platform) ?? 0) + 1;
+        seenPerPlatform.set(k.platform, n);
+        const envKey = `${k.platform.toUpperCase()}_KEY${n > 1 ? `_${n}` : ''}=${k.key}`;
         return k.label ? `# ${k.label}\n${envKey}` : envKey;
       });
       const content = lines.join('\n\n') + '\n';
@@ -431,9 +529,12 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
     if (format === 'csv') {
       const escCsv = (v: string) => `"${v.replace(/"/g, '""')}"`;
       const neutralize = (v: string) => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
-      const header = 'platform,key,label';
+      // base_url is the fourth column: a custom row is an ENDPOINT, and
+      // without its URL the key cannot be re-imported (#687). The importer
+      // tolerates the three-column form too.
+      const header = 'platform,key,label,base_url';
       const lines = decryptedKeys.map(k =>
-        [escCsv(k.platform), escCsv(k.key), escCsv(neutralize(k.label))].join(',')
+        [escCsv(k.platform), escCsv(k.key), escCsv(neutralize(k.label)), escCsv(k.baseUrl ?? '')].join(',')
       );
       const content = [header, ...lines].join('\n') + '\n';
       return new Response(content, {
