@@ -1,10 +1,11 @@
-import { getUnifiedApiKey, regenerateUnifiedKey, getDb } from '../../db/index.js';
-import { jsonResponse, errorResponse } from '../../lib/json.js';
+import { getUnifiedApiKey, regenerateUnifiedKey, getDb, setSetting, getSetting } from '../../db/index.js';
+import { jsonResponse } from '../../lib/json.js';
 import { probeProxyUrl, DEFAULT_PROXY_PROBE_TARGET, getProxyBypassPlatforms } from '../../lib/proxy.js';
 import { getProvider } from '../../providers/index.js';
 import type { Platform } from '@freellmapi/shared/types.js';
 import { z } from 'zod';
 import { getAppVersion } from '../../lib/app-version.js';
+import { UPDATE_CHECK_SETTING, isAutoUpdateCheckEnabled } from './update.js';
 import {
   isUnifyEnabled,
   setUnifyEnabled,
@@ -19,7 +20,9 @@ import {
   savedFusionConfigSchema,
 } from '../../services/fusion.js';
 import { getClaudeModelMap, setClaudeModelMap } from '../../services/anthropic-map.js';
-import { getCompressionStats } from '../../services/compression/stats.js';
+import { getGeminiModelMap, setGeminiModelMap } from '../../services/gemini-map.js';
+import { getOllamaEmulationMode } from './ollama.js';
+import { listUrlTokens, mintUrlToken, revokeUrlToken } from '../../services/url-tokens.js';
 
 /**
  * What the proxy probe should call: the /models endpoint of a provider the
@@ -60,6 +63,29 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
     return jsonResponse({ version: getAppVersion() });
   }
 
+  // Opt-in for the dashboard's automatic release reminder (#782). Off unless
+  // the operator turns it on: a self-hosted install must not contact GitHub
+  // on page load on behalf of someone who never asked it to. The manual
+  // checker in Settings is a separate surface and is unaffected by this flag.
+  if (path === '/api/settings/update-check') {
+    if (req.method === 'GET') {
+      return jsonResponse({ enabled: isAutoUpdateCheckEnabled() });
+    }
+    if (req.method === 'PUT') {
+      const parsed = z.object({ enabled: z.boolean() }).strict().safeParse(await req.json());
+      if (!parsed.success) {
+        return jsonResponse({
+          error: {
+            message: `Invalid update check setting: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+            type: 'invalid_request_error',
+          },
+        }, 400);
+      }
+      setSetting(UPDATE_CHECK_SETTING, parsed.data.enabled ? '1' : '0');
+      return jsonResponse({ enabled: isAutoUpdateCheckEnabled() });
+    }
+  }
+
   // Unified API key
   if (path === '/api/settings/api-key') {
     if (req.method === 'GET') {
@@ -87,11 +113,6 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
     let body: { proxyUrl?: string } = {};
     try { body = await req.json(); } catch { /* empty body → probe the saved URL */ }
     return jsonResponse(await probeProxyUrl(body?.proxyUrl, { targetUrl: proxyProbeTarget() }));
-  }
-
-  // Compression stats
-  if (path === '/api/compression/stats' && req.method === 'GET') {
-    return jsonResponse(getCompressionStats());
   }
 
   // Compression settings
@@ -170,6 +191,83 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
         return jsonResponse({ error: { message: err.message } }, 400);
       }
     }
+  }
+
+  // Gemini model map — mirrors anthropic-map: partial PUT, zod errors from
+  // setGeminiModelMap flattened into a 400 detail string.
+  if (path === '/api/settings/gemini-map') {
+    if (req.method === 'GET') {
+      return jsonResponse({ map: getGeminiModelMap() });
+    }
+    if (req.method === 'PUT') {
+      try {
+        return jsonResponse({ map: setGeminiModelMap(await req.json()) });
+      } catch (err: any) {
+        const detail = err?.errors
+          ? err.errors.map((e: any) => (e.path?.length ? `${e.path.join('.')}: ${e.message}` : e.message)).slice(0, 5).join(', ')
+          : (err?.message ?? 'invalid');
+        return jsonResponse({ error: { message: `Invalid Gemini model map: ${detail}`, type: 'invalid_request_error' } }, 400);
+      }
+    }
+  }
+
+  // Agent compatibility (#411): how permissive the Ollama/Claude-Code emulation
+  // surfaces are for unauthenticated local clients.
+  const compatibilitySchema = z.object({
+    ollamaEmulation: z.enum(['off', 'open-loopback', 'key-required']).optional(),
+    exposeClaudeDiscoveryAliases: z.boolean().optional(),
+  }).strict();
+
+  if (path === '/api/settings/agent-compatibility') {
+    if (req.method === 'GET') {
+      return jsonResponse({
+        ollamaEmulation: getOllamaEmulationMode(),
+        exposeClaudeDiscoveryAliases: getSetting('expose_cc_discovery_aliases') === '1',
+      });
+    }
+    if (req.method === 'PUT') {
+      let body: unknown;
+      try { body = await req.json(); } catch { body = undefined; }
+      const parsed = compatibilitySchema.safeParse(body);
+      if (!parsed.success) {
+        return jsonResponse({
+          error: {
+            message: `Invalid agent compatibility settings: ${parsed.error.errors.map(error => error.message).join(', ')}`,
+            type: 'invalid_request_error',
+          },
+        }, 400);
+      }
+      if (parsed.data.ollamaEmulation) setSetting('ollama_emulation', parsed.data.ollamaEmulation);
+      if (parsed.data.exposeClaudeDiscoveryAliases !== undefined) {
+        setSetting('expose_cc_discovery_aliases', parsed.data.exposeClaudeDiscoveryAliases ? '1' : '0');
+      }
+      return jsonResponse({
+        ollamaEmulation: getOllamaEmulationMode(),
+        exposeClaudeDiscoveryAliases: getSetting('expose_cc_discovery_aliases') === '1',
+      });
+    }
+  }
+
+  // URL tokens (#521): mint/revoke the /t/<token> share links.
+  if (path === '/api/settings/url-tokens' && req.method === 'GET') {
+    return jsonResponse({ tokens: listUrlTokens() });
+  }
+  if (path === '/api/settings/url-tokens' && req.method === 'POST') {
+    const parsed = z.object({ label: z.string().max(120).optional() }).safeParse(await req.json());
+    if (!parsed.success) {
+      return jsonResponse({ error: { message: 'Invalid URL token label', type: 'invalid_request_error' } }, 400);
+    }
+    return jsonResponse(mintUrlToken(parsed.data.label ?? ''), 201);
+  }
+  if (path.startsWith('/api/settings/url-tokens/') && req.method === 'DELETE') {
+    const id = Number.parseInt(path.slice('/api/settings/url-tokens/'.length), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      return jsonResponse({ error: { message: 'Invalid URL token id', type: 'invalid_request_error' } }, 400);
+    }
+    if (!revokeUrlToken(id)) {
+      return jsonResponse({ error: { message: 'Active URL token not found', type: 'not_found_error' } }, 404);
+    }
+    return new Response(null, { status: 204 });
   }
 
   return new Response('Not Found', { status: 404 });

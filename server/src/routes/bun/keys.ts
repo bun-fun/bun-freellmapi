@@ -4,7 +4,14 @@ import { encrypt, decrypt, maskKey } from '../../lib/crypto.js';
 import { jsonResponse } from '../../lib/json.js';
 import { z } from 'zod';
 import { resolveProvider, getAllProviders } from '../../providers/index.js';
-import { resolveCustomEndpointKey } from '../../services/custom-endpoint.js';
+import { resolveCustomEndpointKey, customEndpointKeyIds } from '../../services/custom-endpoint.js';
+import { normalizeBaseUrl } from '../../lib/endpoint-scope.js';
+import { assessProviderUrl } from '../../lib/url-guard.js';
+import { discoverEndpointModels, probeEndpointModel, ModelDiscoveryError } from '../../services/model-discovery.js';
+import { clearCooldownsForKey } from '../../services/ratelimit.js';
+import { registerCustomChatModels, type CustomModelEntry } from '../../services/custom-model-register.js';
+import { probeEmbeddingDimensions, registerCustomEmbeddingModel } from '../../services/embeddings.js';
+import { parseKeysFromFile, stripTrailingCommas, stripJsoncComments } from '../../lib/key-parser.js';
 
 // PBKDF2 password verification — must match the Bun fork's auth.ts / db/index.ts
 // which stores password_hash as a plain hex PBKDF2 digest and salt in a
@@ -45,6 +52,168 @@ function enabledModelCount(db: ReturnType<typeof getDb>, platform: string): numb
     'SELECT COUNT(*) AS c FROM models WHERE platform = ? AND enabled = 1',
   ).get(platform) as { c: number };
   return row.c;
+}
+
+interface CustomEndpointRef {
+  baseUrl: string;
+  keyId: number | null;
+  storedKey: string | null;
+}
+
+// Turn a `{ keyId?, baseUrl? }` reference into the endpoint it names. A keyId
+// is the stronger reference (it identifies one credential of the pool); a bare
+// baseUrl falls back to the endpoint's first stored key, which is how the rest
+// of the custom-endpoint machinery addresses an endpoint. Throws a
+// `{ status, message }` for a reference that names nothing usable.
+function resolveEndpointRef(ref: { keyId?: number; baseUrl?: string }): CustomEndpointRef {
+  const db = getDb();
+  const requestedBaseUrl = ref.baseUrl === undefined ? undefined : normalizeBaseUrl(ref.baseUrl);
+
+  if (ref.keyId !== undefined) {
+    const row = db.prepare('SELECT id, platform, base_url, encrypted_key, iv, auth_tag FROM api_keys WHERE id = ?')
+      .get(ref.keyId) as { id: number; platform: string; base_url: string | null; encrypted_key: string; iv: string; auth_tag: string } | undefined;
+    if (!row || row.platform !== 'custom' || !row.base_url) {
+      throw Object.assign(new Error('keyId does not name a custom endpoint'), { status: 400 });
+    }
+    if (requestedBaseUrl !== undefined && requestedBaseUrl !== row.base_url) {
+      throw Object.assign(new Error('baseUrl does not match the endpoint keyId belongs to'), { status: 400 });
+    }
+    let storedKey: string | null = null;
+    try {
+      storedKey = decrypt(row.encrypted_key, row.iv, row.auth_tag);
+    } catch { /* an undecryptable row still names the endpoint */ }
+    return { baseUrl: row.base_url, keyId: row.id, storedKey };
+  }
+
+  if (!requestedBaseUrl) {
+    throw Object.assign(new Error('baseUrl or keyId is required'), { status: 400 });
+  }
+
+  // Any key of this base_url serves the whole endpoint (#619), so the first one
+  // is as good a representative as any.
+  const rows = db.prepare(`
+    SELECT id, encrypted_key, iv, auth_tag FROM api_keys
+     WHERE platform = 'custom' AND base_url = ? ORDER BY id
+  `).all(requestedBaseUrl) as Array<{ id: number; encrypted_key: string; iv: string; auth_tag: string }>;
+  for (const row of rows) {
+    try {
+      return { baseUrl: requestedBaseUrl, keyId: row.id, storedKey: decrypt(row.encrypted_key, row.iv, row.auth_tag) };
+    } catch { /* try the next credential */ }
+  }
+  return { baseUrl: requestedBaseUrl, keyId: rows[0]?.id ?? null, storedKey: null };
+}
+
+// SSRF guard (#440): a base_url is the one user-controlled outbound target.
+// Cloud metadata / link-local addresses are rejected outright; private ranges
+// too when FREEAPI_BLOCK_PRIVATE_PROVIDER_URLS is set.
+async function rejectUnsafeBaseUrl(baseUrl: string): Promise<Response | null> {
+  const verdict = await assessProviderUrl(baseUrl);
+  if (verdict.allowed) return null;
+  return jsonResponse({ error: { message: `baseUrl rejected: ${verdict.reason}` } }, 400);
+}
+
+// Ask a configured custom endpoint what models it currently serves (#488).
+const discoverModelsSchema = z.object({
+  baseUrl: z.string().url('baseUrl must be a valid URL').optional(),
+  keyId: z.number().int().positive().optional(),
+  // Lets the Keys page fetch a list for an endpoint the user is still typing in,
+  // before it has been saved. Falls back to the endpoint's stored credential.
+  apiKey: z.string().optional(),
+}).refine(
+  d => d.baseUrl !== undefined || d.keyId !== undefined,
+  { message: 'baseUrl or keyId is required' },
+);
+
+function splitRawKey(rawKey: string) {
+  const eqIndex = rawKey.indexOf('=');
+  return {
+    keyName: eqIndex === -1 ? rawKey : rawKey.slice(0, eqIndex),
+    keyValue: eqIndex === -1 ? '' : rawKey.slice(eqIndex + 1),
+  };
+}
+
+function insertImportedKey(platform: (typeof PLATFORMS)[number], keyName: string, keyValue: string) {
+  if (platform === 'custom') {
+    throw new Error('Custom providers must be added with a base URL');
+  }
+  if (!resolveProvider(platform)) {
+    throw new Error(`Unsupported platform: ${platform}`);
+  }
+
+  const db = getDb();
+  const { encrypted, iv, authTag } = encrypt(keyValue.trim());
+  db.prepare(`
+    INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+    VALUES (?, ?, ?, ?, ?, 'unknown', 1)
+  `).run(platform, keyName, encrypted, iv, authTag);
+}
+
+// Models attached to an imported custom endpoint (#382). Ids that look like
+// embedding models go through the embeddings path — it needs a dimension, so
+// reuse the stored one when the model is already registered and probe the
+// endpoint only for a new id. Everything else registers as a chat model.
+async function registerImportedModels(
+  db: ReturnType<typeof getDb>,
+  baseUrl: string,
+  keyId: number,
+  apiKey: string,
+  keyName: string,
+  models: Array<{ id: string; supportsTools?: boolean; supportsVision?: boolean }>,
+  errors: Array<{ key: string; error: string }>,
+): Promise<number> {
+  const chat = models.filter(m => !/embedding/i.test(m.id));
+  const embeds = models.filter(m => /embedding/i.test(m.id));
+  let registered = 0;
+
+  if (chat.length > 0) {
+    const entries: CustomModelEntry[] = chat.map(m => ({
+      modelId: m.id,
+      displayName: null,
+      supportsTools: m.supportsTools,
+      supportsVision: m.supportsVision,
+    }));
+    registered += db.transaction(() => registerCustomChatModels(db, baseUrl, keyId, entries))().length;
+  }
+
+  for (const m of embeds) {
+    try {
+      const existing = db.prepare(
+        "SELECT dimensions FROM embedding_models WHERE platform = 'custom' AND model_id = ?",
+      ).get(m.id) as { dimensions: number } | undefined;
+      const dimensions = existing?.dimensions ?? await probeEmbeddingDimensions(baseUrl, apiKey, m.id);
+      registerCustomEmbeddingModel(db, {
+        keyId,
+        modelId: m.id,
+        displayName: null,
+        family: m.id,
+        dimensions,
+        maxInputTokens: null,
+        quotaLabel: 'custom endpoint',
+      });
+      registered++;
+    } catch (err: any) {
+      errors.push({ key: `${keyName}: ${m.id}`, error: err?.message ?? 'embedding registration failed' });
+    }
+  }
+
+  return registered;
+}
+
+// Parse one uploaded file's bytes into key candidates (#705). JSON/JSONC files
+// are validated before handing them to the parser so malformed exports fail
+// with a clear message instead of a silent zero-key result.
+function parseUploadedFile(name: string, content: string) {
+  if (!content.trim()) {
+    throw Object.assign(new Error('File contains no data'), { status: 400 });
+  }
+  if (/\.jsonc?$/i.test(name)) {
+    try {
+      JSON.parse(stripTrailingCommas(stripJsoncComments(content)));
+    } catch {
+      throw Object.assign(new Error('Invalid JSON format'), { status: 400 });
+    }
+  }
+  return parseKeysFromFile(content, name);
 }
 
 
@@ -324,6 +493,25 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
     return jsonResponse({ success: true });
   }
 
+  // Clear every active cooldown for one key — an escalated cooldown can bench a
+  // key for up to 24h from one bad window; give the operator a way back.
+  // (Must precede the generic DELETE /:id handler, which would otherwise claim
+  // the trailing 'cooldowns' segment as an id.)
+  if (path.startsWith('/api/keys/') && path.endsWith('/cooldowns') && req.method === 'DELETE') {
+    const idStr = path.slice('/api/keys/'.length, -'/cooldowns'.length);
+    const id = Number(idStr);
+    if (!Number.isInteger(id)) {
+      return jsonResponse({ error: 'Invalid key id' }, 400);
+    }
+    const db = getDb();
+    const exists = db.prepare('SELECT 1 FROM api_keys WHERE id = ?').get(id);
+    if (!exists) {
+      return jsonResponse({ error: 'Key not found' }, 404);
+    }
+    const cleared = clearCooldownsForKey(id);
+    return jsonResponse({ success: true, cleared });
+  }
+
   // Delete a key
   if (path.startsWith('/api/keys/') && req.method === 'DELETE') {
     const parts = path.split('/');
@@ -381,6 +569,308 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
     } catch (err: any) {
       return jsonResponse({ error: { message: err.message } }, 400);
     }
+  }
+
+  // Ask an endpoint what models it currently serves (#488). Reads ONLY the
+  // operator's own base_url with their own key; nothing is written.
+  if (path === '/api/keys/custom/discover-models' && req.method === 'POST') {
+    let body: unknown;
+    try { body = await req.json(); } catch { body = undefined; }
+    const parsed = discoverModelsSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonResponse({ error: { message: parsed.error.errors.map(e => e.message).join(', ') } }, 400);
+    }
+
+    let endpoint: CustomEndpointRef;
+    try {
+      endpoint = resolveEndpointRef(parsed.data);
+    } catch (err: any) {
+      return jsonResponse({ error: { message: err.message } }, err.status ?? 400);
+    }
+
+    const rejected = await rejectUnsafeBaseUrl(endpoint.baseUrl);
+    if (rejected) return rejected;
+
+    // A submitted key wins (the user may be rotating it); otherwise use what the
+    // endpoint already has. Auth-less local servers keep the 'no-key' sentinel.
+    const apiKey = parsed.data.apiKey?.trim() || endpoint.storedKey || 'no-key';
+
+    try {
+      const discovered = await discoverEndpointModels(endpoint.baseUrl, apiKey);
+
+      // "Already registered" means bound to THIS endpoint — any key of the pool
+      // counts, since they all serve the same model list (#619).
+      const db = getDb();
+      const registeredIds = new Set<string>();
+      if (endpoint.keyId != null) {
+        const poolIds = [...customEndpointKeyIds(db, endpoint.keyId)];
+        const placeholders = poolIds.map(() => '?').join(', ');
+        const rows = db.prepare(
+          `SELECT model_id FROM models WHERE platform = 'custom' AND key_id IN (${placeholders})`,
+        ).all(...poolIds) as { model_id: string }[];
+        for (const row of rows) registeredIds.add(row.model_id);
+      }
+
+      const models = discovered.map(m => ({ ...m, registered: registeredIds.has(m.id) }));
+      return jsonResponse({
+        baseUrl: endpoint.baseUrl,
+        keyId: endpoint.keyId,
+        models,
+        total: models.length,
+        registeredCount: models.filter(m => m.registered).length,
+      });
+    } catch (err: any) {
+      if (err instanceof ModelDiscoveryError) {
+        return jsonResponse({ error: { message: err.message } }, err.status);
+      }
+      return jsonResponse({ error: { message: `Model discovery failed: ${err?.message ?? 'unknown error'}` } }, 502);
+    }
+  }
+
+  // Fire one minimal real chat request at the endpoint (#685): gives an
+  // unmeasured model a reliability/speed sample immediately. Only a SUCCESSFUL
+  // probe writes a `requests` row and lifts the key's cooldowns.
+  if (path === '/api/keys/custom/probe' && req.method === 'POST') {
+    let body: unknown;
+    try { body = await req.json(); } catch { body = undefined; }
+    const parsed = discoverModelsSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonResponse({ error: { message: parsed.error.errors.map(e => e.message).join(', ') } }, 400);
+    }
+
+    let endpoint: CustomEndpointRef;
+    try {
+      endpoint = resolveEndpointRef(parsed.data);
+    } catch (err: any) {
+      return jsonResponse({ error: { message: err.message } }, err.status ?? 400);
+    }
+
+    const rejected = await rejectUnsafeBaseUrl(endpoint.baseUrl);
+    if (rejected) return rejected;
+
+    const apiKey = parsed.data.apiKey?.trim() || endpoint.storedKey || 'no-key';
+
+    // Probe a model actually REGISTERED on this endpoint when there is one —
+    // the sample must feed the stats of a model the router can pick. Any key
+    // of the pool counts (#619); discovery is only the fallback.
+    let registeredModelId: string | null = null;
+    if (endpoint.keyId != null) {
+      const db = getDb();
+      const poolIds = [...customEndpointKeyIds(db, endpoint.keyId)];
+      const placeholders = poolIds.map(() => '?').join(', ');
+      const row = db.prepare(
+        `SELECT model_id FROM models WHERE platform = 'custom' AND key_id IN (${placeholders}) ORDER BY id LIMIT 1`,
+      ).get(...poolIds) as { model_id: string } | undefined;
+      registeredModelId = row?.model_id ?? null;
+    }
+
+    try {
+      const probe = await probeEndpointModel(endpoint.baseUrl, apiKey, registeredModelId);
+
+      if (endpoint.keyId != null) {
+        getDb().prepare(`
+          INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, ttfb_ms, request_type)
+          VALUES ('custom', ?, ?, 'success', ?, ?, ?, ?, 'chat')
+        `).run(probe.modelId, endpoint.keyId, probe.inputTokens, probe.outputTokens, probe.latencyMs, probe.latencyMs);
+        clearCooldownsForKey(endpoint.keyId);
+      }
+
+      return jsonResponse({ modelId: probe.modelId, latencyMs: probe.latencyMs });
+    } catch (err: any) {
+      if (err instanceof ModelDiscoveryError) {
+        return jsonResponse({ error: { message: err.message } }, err.status);
+      }
+      return jsonResponse({ error: { message: `Probe failed: ${err?.message ?? 'unknown error'}` } }, 502);
+    }
+  }
+
+  // Reveal ONE key in plaintext for a copy action (#705), gated exactly like
+  // the export it narrows: session alone is not enough, re-enter the password.
+  if (path.startsWith('/api/keys/') && path.endsWith('/reveal') && req.method === 'POST') {
+    const password = req.headers.get('x-reauth-password');
+    if (!password) {
+      return jsonResponse({ error: { message: 'Password verification required to reveal a key', type: 'authentication_error' } }, 403);
+    }
+    const db = getDb();
+    const user = db.prepare('SELECT id, password_hash, salt FROM users LIMIT 1').get() as { id: number; password_hash: string; salt: string } | undefined;
+    if (!user || !user.salt || !verifyDashboardPassword(password, user.password_hash, user.salt)) {
+      return jsonResponse({ error: { message: 'Password verification required to reveal a key', type: 'authentication_error' } }, 403);
+    }
+
+    const idStr = path.slice('/api/keys/'.length, -'/reveal'.length);
+    const id = parseInt(idStr, 10);
+    if (isNaN(id)) {
+      return jsonResponse({ error: { message: 'Invalid key ID' } }, 400);
+    }
+
+    const row = db.prepare('SELECT encrypted_key, iv, auth_tag FROM api_keys WHERE id = ?')
+      .get(id) as { encrypted_key: string; iv: string; auth_tag: string } | undefined;
+    if (!row) {
+      return jsonResponse({ error: { message: 'Key not found' } }, 404);
+    }
+
+    try {
+      return jsonResponse({ key: decrypt(row.encrypted_key, row.iv, row.auth_tag) });
+    } catch {
+      return jsonResponse({ error: { message: 'This key could not be decrypted. It was stored with a different ENCRYPTION_KEY.' } }, 500);
+    }
+  }
+
+  // Bulk import preview (#705): parse uploaded files into candidate keys and
+  // flag duplicates against what is already stored. Nothing is persisted here.
+  if (path === '/api/keys/preview' && req.method === 'POST') {
+    try {
+      const form = await req.formData();
+      const files = [...form.getAll('files')].filter((v): v is File => v instanceof File);
+      if (files.length === 0) {
+        return jsonResponse({ error: { message: 'No files uploaded' } }, 400);
+      }
+      if (files.length > 10) {
+        return jsonResponse({ error: { message: 'Too many files. Maximum is 10' } }, 413);
+      }
+
+      const keys: Array<{
+        keyName: string; keyValue: string; detectedPlatform: string | null; prefix: string;
+        baseUrl?: string; models?: Array<{ id: string; supportsTools?: boolean; supportsVision?: boolean }>;
+        isDuplicate: boolean;
+      }> = [];
+      const skipped: string[] = [];
+
+      const db = getDb();
+      const existingRows = db.prepare('SELECT encrypted_key, iv, auth_tag FROM api_keys').all() as any[];
+      const existingKeys = new Set<string>();
+      for (const row of existingRows) {
+        try {
+          existingKeys.add(decrypt(row.encrypted_key, row.iv, row.auth_tag));
+        } catch { /* skip undecryptable rows */ }
+      }
+
+      let duplicateCount = 0;
+
+      for (const file of files) {
+        const content = await file.text();
+        const result = parseUploadedFile(file.name, content);
+        for (const parsedKey of result.keys) {
+          const { keyName, keyValue } = splitRawKey(parsedKey.rawKey);
+          const isDuplicate = existingKeys.has(keyValue.trim());
+          if (isDuplicate) duplicateCount++;
+          keys.push({
+            keyName,
+            keyValue,
+            detectedPlatform: parsedKey.platform,
+            prefix: parsedKey.prefix,
+            ...(parsedKey.baseUrl ? { baseUrl: parsedKey.baseUrl } : {}),
+            ...(parsedKey.models?.length ? { models: parsedKey.models } : {}),
+            isDuplicate,
+          });
+        }
+        skipped.push(...result.skipped);
+      }
+
+      return jsonResponse({ keys, total: keys.length, skipped, duplicates: duplicateCount });
+    } catch (handlerErr: any) {
+      return jsonResponse({ error: { message: handlerErr.message } }, handlerErr.status ?? 500);
+    }
+  }
+
+  // Import the preview-selected keys (#687/#382). This is the route the
+  // dashboard actually uses after /preview, so custom endpoints must restore
+  // from their own export file here.
+  if (path === '/api/keys/import-selected' && req.method === 'POST') {
+    let body: unknown;
+    try { body = await req.json(); } catch { body = undefined; }
+    const importKeySchema = z.object({
+      keyName: z.string().optional(),
+      keyValue: z.string().min(1),
+      platform: z.enum(PLATFORMS),
+      baseUrl: z.string().optional(),
+      models: z.array(z.object({
+        id: z.string().min(1),
+        supportsTools: z.boolean().optional(),
+        supportsVision: z.boolean().optional(),
+      })).max(200).optional(),
+    });
+    const parsed = z.object({ keys: z.array(importKeySchema).max(100) }).safeParse(body);
+    if (!parsed.success) {
+      return jsonResponse({ error: { message: parsed.error.errors.map(e => e.message).join(', ') } }, 400);
+    }
+
+    let imported = 0;
+    let duplicateSkipped = 0;
+    let modelsRegistered = 0;
+    const errors: Array<{ key: string; error: string }> = [];
+
+    const db = getDb();
+    const existingRows = db.prepare('SELECT encrypted_key, iv, auth_tag FROM api_keys').all() as any[];
+    const existingKeys = new Set<string>();
+    for (const row of existingRows) {
+      try {
+        existingKeys.add(decrypt(row.encrypted_key, row.iv, row.auth_tag));
+      } catch { /* skip undecryptable rows */ }
+    }
+
+    // One SSRF verdict per endpoint, not per key — a pooled endpoint brings
+    // several keys to one URL and each check costs a DNS lookup.
+    const urlVerdicts = new Map<string, { allowed: boolean; reason?: string }>();
+
+    for (const key of parsed.data.keys) {
+      const keyName = key.keyName?.trim() || key.platform;
+      if (key.platform === 'custom') {
+        if (!key.baseUrl) {
+          errors.push({ key: keyName, error: 'Custom providers must be added with a base URL' });
+          continue;
+        }
+        const baseUrl = normalizeBaseUrl(key.baseUrl);
+        let verdict = urlVerdicts.get(baseUrl);
+        if (!verdict) {
+          verdict = await assessProviderUrl(baseUrl);
+          urlVerdicts.set(baseUrl, verdict);
+        }
+        if (!verdict.allowed) {
+          errors.push({ key: keyName, error: `baseUrl rejected: ${verdict.reason}` });
+          continue;
+        }
+        try {
+          // 'no-key' is the auth-less placeholder — hand it over as "no key
+          // submitted" so the resolver stores the sentinel once instead of
+          // encrypting the literal string. Going through the resolver keeps
+          // endpoint pooling intact (#619).
+          const secret = key.keyValue.trim() === 'no-key' ? undefined : key.keyValue.trim() || undefined;
+          const resolved = resolveCustomEndpointKey(db, baseUrl, secret, keyName);
+          imported++;
+          if (key.models?.length) {
+            modelsRegistered += await registerImportedModels(
+              db, baseUrl, resolved.keyId, resolved.storedKey, keyName, key.models, errors,
+            );
+          }
+        } catch (err) {
+          errors.push({ key: keyName, error: (err as Error).message });
+        }
+        continue;
+      }
+
+      if (existingKeys.has(key.keyValue.trim())) {
+        duplicateSkipped++;
+        errors.push({ key: keyName, error: 'Duplicate key — already exists' });
+        continue;
+      }
+
+      try {
+        insertImportedKey(key.platform, keyName, key.keyValue);
+        imported++;
+        existingKeys.add(key.keyValue.trim());
+      } catch (err) {
+        errors.push({ key: keyName, error: (err as Error).message });
+      }
+    }
+
+    return jsonResponse({
+      imported,
+      skipped: [],
+      errors,
+      total: parsed.data.keys.length,
+      modelsRegistered,
+    });
   }
 
   return new Response('Not Found', { status: 404 });

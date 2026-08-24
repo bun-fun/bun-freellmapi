@@ -9,6 +9,9 @@ import { fallbackRoute } from './routes/bun/fallback.js';
 import { analyticsRoute } from './routes/bun/analytics.js';
 import { healthRoute } from './routes/bun/health.js';
 import { settingsRoute } from './routes/bun/settings.js';
+import { updateRoute } from './routes/bun/update.js';
+import { compressionRoute } from './routes/bun/compression.js';
+import { clientProfilesRoute } from './routes/bun/client-profiles.js';
 import { proxyRoute } from './routes/bun/proxy.js';
 import { responsesRoute } from './routes/bun/responses.js';
 import { anthropicRoute, anthropicCountTokensRoute } from './routes/bun/anthropic.js';
@@ -155,6 +158,22 @@ async function start() {
 
     if (pathname.startsWith('/api/settings')) {
       const res = await settingsRoute(req, url);
+      return addCors(req, res);
+    }
+
+    // Dashboard update checker (GitHub compare / latest release, opt-in gated)
+    if (pathname.startsWith('/api/update')) {
+      const res = await updateRoute(req, url);
+      return addCors(req, res);
+    }
+
+    if (pathname.startsWith('/api/compression')) {
+      const res = await compressionRoute(req, url);
+      return addCors(req, res);
+    }
+
+    if (pathname.startsWith('/api/client-profiles')) {
+      const res = await clientProfilesRoute(req, url);
       return addCors(req, res);
     }
 
