@@ -315,6 +315,47 @@ function ensureSchemaCompat(db: DatabaseType) {
       ON playground_conversations(updated_at_ms DESC);
   `);
 
+  // Client profiles (upstream migration 20260805_000002, #411): per-client
+  // sk-cp-... keys with a server-enforced system prompt. Auth looks up the
+  // token_hash; encrypted_key/iv/auth_tag only render the masked dashboard key.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS client_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      encrypted_key TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      auth_tag TEXT NOT NULL,
+      system_prompt TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  // URL tokens (upstream migration 20260727_000001, #521) plus the agent
+  // compatibility defaults it seeds. Only the hash is stored; the prefix is
+  // for the dashboard list.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS url_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token_hash TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL DEFAULT '',
+      token_prefix TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_url_tokens_active
+      ON url_tokens(token_hash, revoked_at);
+  `);
+  db.prepare(
+    "INSERT INTO settings (key, value) VALUES ('ollama_emulation', 'off') ON CONFLICT(key) DO NOTHING",
+  ).run();
+  db.prepare(
+    "INSERT INTO settings (key, value) VALUES ('expose_cc_discovery_aliases', '0') ON CONFLICT(key) DO NOTHING",
+  ).run();
+
   // Legacy baseline columns
   ensureCol(db, 'models', 'supports_vision', 'INTEGER NOT NULL DEFAULT 0');
   ensureCol(db, 'models', 'supports_tools', 'INTEGER NOT NULL DEFAULT 0');
@@ -467,8 +508,13 @@ function ensureMigrationTables(db: DatabaseType) {
 function ensureModelsEndpointScopeUnique(db: DatabaseType) {
   const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='models'").get() as { sql: string } | undefined;
   if (!schema) return;
-  // If the schema already has endpoint_scope in the UNIQUE clause, nothing to do.
-  if (/endpoint_scope/i.test(schema.sql)) return;
+  // Only skip when endpoint_scope appears INSIDE a UNIQUE(...) constraint. A
+  // plain column mention (fresh baseline adds the column but keeps the old
+  // two-column unique) must not satisfy this check — otherwise the rebuild
+  // never runs and ON CONFLICT(platform, model_id, endpoint_scope) fails.
+  for (const match of schema.sql.matchAll(/UNIQUE\s*\(([^)]*)\)/gi)) {
+    if (/endpoint_scope/i.test(match[1])) return;
+  }
 
   // Rebuild models with the new unique constraint, preserving all data.
   // Same approach as the migration: park child rows, rebuild, restore.

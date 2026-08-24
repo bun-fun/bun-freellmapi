@@ -102,26 +102,31 @@ export function registerCustomChatModels(
     // The seed applies on INSERT only: DO UPDATE deliberately leaves the rank
     // columns alone so re-registering a model (or bulk-adding alongside it)
     // never rewrites ranks the operator has since tuned by hand.
+    // Positional params — bun:sqlite does not bind @named/:named object keys
+    // the way better-sqlite3 does (they silently bind NULL), so this upsert
+    // must not use named placeholders.
     db.prepare(`
       INSERT INTO models
         (platform, model_id, display_name, intelligence_rank, speed_rank, size_label,
          rpm_limit, rpd_limit, tpm_limit, tpd_limit, monthly_token_budget, context_window, enabled, key_id,
          supports_tools, supports_vision, source, endpoint_scope)
-      VALUES ('custom', @modelId, COALESCE(@displayName, @modelId), @intelligenceRank, @speedRank, @sizeLabel,
-         NULL, NULL, NULL, NULL, '', NULL, 1, @keyId,
-         COALESCE(@tools, 1), COALESCE(@vision, 0), 'user', @endpointScope)
+      VALUES ('custom', ?, COALESCE(?, ?), ?, ?, ?,
+         NULL, NULL, NULL, NULL, '', NULL, 1, ?,
+         COALESCE(?, 1), COALESCE(?, 0), 'user', ?)
       ON CONFLICT(platform, model_id, endpoint_scope)
       DO UPDATE SET
-        display_name = COALESCE(@displayName, display_name),
+        display_name = COALESCE(excluded.display_name, display_name),
         key_id = excluded.key_id,
         enabled = 1,
-        supports_tools = COALESCE(@tools, supports_tools),
-        supports_vision = COALESCE(@vision, supports_vision)
-    `).run({
-      modelId, displayName, keyId: bindKeyId, tools: toolsParam, vision: visionParam,
-      intelligenceRank: seed.intelligenceRank, speedRank: seed.speedRank, sizeLabel: seed.sizeLabel,
+        supports_tools = COALESCE(excluded.supports_tools, supports_tools),
+        supports_vision = COALESCE(excluded.supports_vision, supports_vision)
+    `).run(
+      modelId, displayName, modelId,
+      seed.intelligenceRank, seed.speedRank, seed.sizeLabel,
+      bindKeyId,
+      toolsParam, visionParam,
       endpointScope,
-    });
+    );
 
     // Read back rather than echo the submitted values: an omitted display name
     // or capability flag resolves in SQL, so the row is the only place that
