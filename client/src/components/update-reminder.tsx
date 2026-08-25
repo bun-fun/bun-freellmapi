@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { ArrowUpRight, Sparkles, X } from 'lucide-react'
 import {
   Dialog,
@@ -7,9 +7,15 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { Markdown } from '@/components/markdown'
 import { apiFetch } from '@/lib/api'
 import { useI18n } from '@/i18n'
+
+// The markdown renderer (react-markdown + the whole remark/micromark stack)
+// is only needed when release notes are actually shown, so it is fetched on
+// first render of the notes instead of weighing down the initial bundle.
+const Markdown = lazy(() =>
+  import('@/components/markdown').then(m => ({ default: m.Markdown })),
+)
 
 const RELEASES_URL = 'https://github.com/tashfeenahmed/freellmapi/releases'
 
@@ -246,7 +252,9 @@ export function UpdateReminder() {
 
           {release.body ? (
             <div className="max-h-[45vh] overflow-y-auto rounded-xl border bg-muted/20 p-4">
-              <Markdown>{release.body}</Markdown>
+              <Suspense fallback={null}>
+                <Markdown>{release.body}</Markdown>
+              </Suspense>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">{t('update.noNotes')}</p>

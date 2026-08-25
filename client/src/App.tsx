@@ -1,7 +1,7 @@
-import { useState, type ReactNode } from 'react'
+import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, NavLink, Link, useLocation, useNavigate } from 'react-router-dom'
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { ChevronDown, KeyRound, LogOut, Menu, MoreHorizontal, Search, Settings, Sparkles } from 'lucide-react'
+import { ChevronDown, KeyRound, Loader2, LogOut, Menu, MoreHorizontal, Search, Settings, Sparkles } from 'lucide-react'
 import { buttonVariants } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -26,20 +26,25 @@ import { I18nProvider, useI18n } from '@/i18n'
 import { logout } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { ThemeProvider } from '@/theme'
-import KeysPage from '@/pages/KeysPage'
-import PlaygroundPage from '@/pages/PlaygroundPage'
-import FallbackPage from '@/pages/FallbackPage'
-import ModelDetailPage from '@/pages/ModelDetailPage'
-import FusionPage from '@/pages/FusionPage'
-import EmbeddingsPage from '@/pages/EmbeddingsPage'
-import ImagePage from '@/pages/ImagePage'
-import AudioPage from '@/pages/AudioPage'
-import MediaDetailPage from '@/pages/MediaDetailPage'
-import EmbeddingDetailPage from '@/pages/EmbeddingDetailPage'
-import AnalyticsPage from '@/pages/AnalyticsPage'
-import PremiumPage from '@/pages/PremiumPage'
+// Pages are route-split: each becomes its own chunk fetched on navigation, so
+// the initial payload (what a cold Hugging Face container must parse before
+// first paint) stays small. Only the 404 page is eager — it is tiny and must
+// render even while other chunks are in flight.
 import NotFoundPage from '@/pages/NotFoundPage'
-import AgentsPage from '@/pages/AgentsPage'
+
+const KeysPage = lazy(() => import('@/pages/KeysPage'))
+const PlaygroundPage = lazy(() => import('@/pages/PlaygroundPage'))
+const FallbackPage = lazy(() => import('@/pages/FallbackPage'))
+const ModelDetailPage = lazy(() => import('@/pages/ModelDetailPage'))
+const FusionPage = lazy(() => import('@/pages/FusionPage'))
+const EmbeddingsPage = lazy(() => import('@/pages/EmbeddingsPage'))
+const EmbeddingDetailPage = lazy(() => import('@/pages/EmbeddingDetailPage'))
+const ImagePage = lazy(() => import('@/pages/ImagePage'))
+const AudioPage = lazy(() => import('@/pages/AudioPage'))
+const MediaDetailPage = lazy(() => import('@/pages/MediaDetailPage'))
+const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage'))
+const PremiumPage = lazy(() => import('@/pages/PremiumPage'))
+const AgentsPage = lazy(() => import('@/pages/AgentsPage'))
 
 // Every failed mutation surfaces as an error toast, so no action fails
 // silently. A page that already shows the failure inline can opt out with
@@ -370,7 +375,14 @@ function App() {
                 <Navbar />
                 <PageContainer>
                   <PageBoundary>
-                    <Routes>
+                    <Suspense
+                      fallback={
+                        <div className="flex items-center justify-center py-24 text-muted-foreground">
+                          <Loader2 className="size-5 animate-spin" />
+                        </div>
+                      }
+                    >
+                      <Routes>
                       <Route path="/" element={<Navigate to="/models/chat" replace />} />
                       <Route path="/models" element={<Navigate to="/models/chat" replace />} />
                       <Route path="/models/chat" element={<FallbackPage />} />
@@ -392,7 +404,8 @@ function App() {
                       <Route path="/test" element={<Navigate to="/playground" replace />} />
                       <Route path="/health" element={<Navigate to="/keys" replace />} />
                       <Route path="*" element={<NotFoundPage />} />
-                    </Routes>
+                      </Routes>
+                    </Suspense>
                   </PageBoundary>
                 </PageContainer>
                 <Toaster />
