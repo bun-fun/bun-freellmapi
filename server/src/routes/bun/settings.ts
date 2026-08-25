@@ -19,6 +19,11 @@ import {
   getFusionMaxK,
   savedFusionConfigSchema,
 } from '../../services/fusion.js';
+import {
+  compressionUpdateSchema,
+  getCompressionConfig,
+  setCompressionConfig,
+} from '../../services/compression/config.js';
 import { getClaudeModelMap, setClaudeModelMap } from '../../services/anthropic-map.js';
 import { getGeminiModelMap, setGeminiModelMap } from '../../services/gemini-map.js';
 import { getOllamaEmulationMode } from './ollama.js';
@@ -115,18 +120,25 @@ export async function settingsRoute(req: Request, _url: URL): Promise<Response> 
     return jsonResponse(await probeProxyUrl(body?.proxyUrl, { targetUrl: proxyProbeTarget() }));
   }
 
-  // Compression settings
+  // Compression settings — always routed through the compression service so
+  // the stored shape (setting key `compression`) is exactly what the pipeline
+  // reads; raw read/write here would save to a key the pipeline never loads.
   if (path === '/api/settings/compression') {
-    const db = getDb();
     if (req.method === 'GET') {
-      const row = db.prepare("SELECT value FROM settings WHERE key = 'compression_config'").get() as { value: string } | undefined;
-      return jsonResponse(row?.value ? JSON.parse(row.value) : { enabled: false, engines: [] });
+      return jsonResponse(getCompressionConfig());
     }
     if (req.method === 'PUT') {
       try {
-        const body = await req.json();
-        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('compression_config', ?)").run(JSON.stringify(body));
-        return jsonResponse({ success: true });
+        const parsed = compressionUpdateSchema.safeParse(await req.json());
+        if (!parsed.success) {
+          return jsonResponse({
+            error: {
+              message: `Invalid compression config: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+              type: 'invalid_request_error',
+            },
+          }, 400);
+        }
+        return jsonResponse(setCompressionConfig(parsed.data));
       } catch (err: any) {
         return jsonResponse({ error: { message: err.message } }, 400);
       }
