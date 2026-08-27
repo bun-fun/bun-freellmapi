@@ -52,28 +52,26 @@ const toolCallSchema = z.object({
   function: z.object({ name: z.string().min(1), arguments: z.string() }),
 });
 
+const contentField = z.union([z.string(), z.array(z.any())]);
+
 const systemMessageSchema = z.object({
   role: z.literal('system'),
-  content: z.string(),
+  content: contentField,
   name: z.string().optional(),
 });
 
 const userMessageSchema = z.object({
   role: z.literal('user'),
-  content: z.string(),
+  content: contentField,
   name: z.string().optional(),
 });
 
 const assistantMessageSchema = z.object({
   role: z.literal('assistant'),
-  content: z.string().nullable().optional(),
+  content: z.union([z.string(), z.array(z.any()), z.null()]).optional(),
   name: z.string().optional(),
   tool_calls: z.array(toolCallSchema).optional(),
-}).refine((msg) => {
-  const hasContent = typeof msg.content === 'string' && msg.content.length > 0;
-  const hasToolCalls = (msg.tool_calls?.length ?? 0) > 0;
-  return hasContent || hasToolCalls;
-}, { message: 'assistant messages must include non-empty content or tool_calls' });
+});
 
 const toolMessageSchema = z.object({
   role: z.literal('tool'),
