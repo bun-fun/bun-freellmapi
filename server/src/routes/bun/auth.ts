@@ -37,21 +37,32 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
     return jsonResponse({ needsSetup, authenticated, email });
   }
 
-  // POST /api/auth/login — accepts { email, password }, email maps to username
+  // POST /api/auth/login — accepts { email, password } or { username, password }.
+  // The dashboard has always posted a `username` field and the bootstrap banner
+  // prints "Username: admin", while fresh installs store the account as the
+  // email admin@example.com — so a bare name resolves against that address.
   if (path === '/api/auth/login' && req.method === 'POST') {
     try {
       const body = await parseJson(req);
-      const { email, password } = body;
+      const identifier = typeof body.email === 'string' && body.email.trim()
+        ? body.email.trim()
+        : typeof body.username === 'string' ? body.username.trim() : '';
+      const { password } = body;
 
-      if (!email || !password) {
+      if (!identifier || !password) {
         return jsonResponse({ error: { message: 'Email and password required' } }, 400);
       }
 
       const db = getDb();
-      // The new users table uses `email` as the primary lookup column.
-      const user = db.prepare('SELECT id, email, password_hash, salt FROM users WHERE email = ?').get(email) as any;
+      const lookup = db.prepare('SELECT id, email, password_hash, salt FROM users WHERE email = ?');
+      let user = lookup.get(identifier) as any;
+      if (!user && !identifier.includes('@')) {
+        // "admin" → the auto-provisioned admin@example.com row. Exact matches
+        // (legacy rows migrated with the old username as their email) win first.
+        user = lookup.get(`${identifier.toLowerCase()}@example.com`) as any;
+      }
 
-      if (!user) {
+      if (!user || !user.salt) {
         return jsonResponse({ error: { message: 'Invalid email or password', type: 'authentication_error' } }, 401);
       }
 
@@ -68,7 +79,12 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
         user.id, tokenHash, expiresAtMs, new Date().toISOString()
       );
 
-      return jsonResponse({ token: rawToken, email: user.email });
+      // `user` mirrors /api/auth/me's shape — the client stores it verbatim.
+      return jsonResponse({
+        token: rawToken,
+        email: user.email,
+        user: { id: user.id, username: user.email },
+      });
     } catch (err: any) {
       return jsonResponse({ error: { message: err.message } }, 400);
     }
@@ -96,7 +112,7 @@ export async function authRoute(req: Request, url: URL): Promise<Response> {
 
       const salt = crypto.randomBytes(16).toString('hex');
       const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
-      db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run(email, hash);
+      db.prepare('INSERT INTO users (email, password_hash, salt) VALUES (?, ?, ?)').run(email, hash, salt);
 
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');

@@ -626,6 +626,12 @@ function ensureUsersEmailCompat(db: DatabaseType) {
 
   // Park any existing data
   const hasSessions = sessionCols.length > 0;
+  // True when the users rebuild below drops sessions to satisfy the FK. The
+  // table must be recreated afterwards even though its shape already matches
+  // auth.ts — otherwise a fresh baseline database (users without `email`,
+  // sessions already in token_hash shape) loses its sessions table entirely
+  // and dashboard login fails with "no such table: sessions".
+  let droppedSessions = false;
   if (hasSessions) {
     db.exec('CREATE TEMP TABLE "_park_sessions" AS SELECT * FROM sessions');
   }
@@ -659,6 +665,7 @@ function ensureUsersEmailCompat(db: DatabaseType) {
     // parked temp copy preserves the data so we can restore it below.
     if (hasSessions) {
       db.exec('DROP TABLE sessions');
+      droppedSessions = true;
     }
     db.exec('DROP TABLE users');
     db.exec('ALTER TABLE users_email_compat RENAME TO users');
@@ -673,7 +680,9 @@ function ensureUsersEmailCompat(db: DatabaseType) {
     }
   }
 
-  if (needsSessionsRebuild) {
+  // Run when the on-disk shape is wrong, or when the users rebuild above left
+  // no sessions table at all (fresh baseline databases hit exactly that).
+  if (needsSessionsRebuild || droppedSessions) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         token_hash TEXT PRIMARY KEY,
@@ -710,8 +719,9 @@ function ensureUsersEmailCompat(db: DatabaseType) {
         }
         db.exec('DROP TABLE "_park_old_sessions"');
       } else {
-        // Sessions were dropped by the users rebuild; _park_sessions holds the
-        // legacy shape. Migrate old → new columns explicitly.
+        // Sessions were dropped by the users rebuild; _park_sessions holds
+        // either the legacy or the current shape. Migrate explicitly when
+        // legacy; restore verbatim when already token_hash-shaped.
         const parkedCols = (db.prepare('PRAGMA table_info("_park_sessions")').all() as { name: string }[]);
         if (parkedCols.some(c => c.name === 'token')) {
           // Legacy park: id/token/user_id/expires_at
@@ -722,6 +732,8 @@ function ensureUsersEmailCompat(db: DatabaseType) {
             const expiresAtMs = new Date(r.expires_at).getTime();
             ins.run(tokenHash, r.user_id, expiresAtMs, new Date().toISOString());
           }
+        } else if (parkedCols.some(c => c.name === 'token_hash')) {
+          db.exec('INSERT OR IGNORE INTO sessions SELECT * FROM "_park_sessions"');
         }
         db.exec('DROP TABLE "_park_sessions"');
       }

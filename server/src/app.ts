@@ -62,7 +62,9 @@ class TestServer {
   private _bunServer: any = null;
 
   listen(port: number): any {
-    const actualPort = port === 0 ? undefined : port;
+    // Bun treats an undefined port as its default (3000); Express semantics for
+    // listen(0) are "pick a free port", which Bun expresses as port: 0.
+    const actualPort = port === 0 ? 0 : port;
     this._bunServer = Bun.serve({
       port: actualPort,
       hostname: '127.0.0.1',
@@ -221,6 +223,14 @@ class TestServer {
     return {
       address: () => ({ port: this._bunServer!.port, address: '127.0.0.1' }),
       close: () => this._bunServer!.stop(true),
+      // Bun.serve binds synchronously, so the Express-era `server.listening`
+      // probe and the `await server.once('listening', ...)` guard both see an
+      // already-listening socket.
+      listening: true,
+      once(_event: string, callback: () => void): unknown {
+        callback();
+        return this;
+      },
     };
   }
 
