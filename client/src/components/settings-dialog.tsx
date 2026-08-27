@@ -287,6 +287,18 @@ const ENGINES = [
   { id: 'hard-budget', tKey: 'engineHardBudget', lossless: false },
 ] as const
 
+// Mirrors MODE_ENGINES in server/src/services/compression/pipeline.ts: the set
+// of engines each mode actually runs at request time. Picking a mode applies
+// its preset to the engine switches so what shows enabled is what the pipeline
+// would use; switches stay editable afterwards for per-engine overrides.
+// `off` runs nothing regardless of switches, so it leaves them untouched.
+const MODE_ENGINE_PRESETS: Record<CompressionMode, readonly string[]> = {
+  off: [],
+  lossless: ['dedup', 'lite', 'jsoncompact'],
+  standard: ['dedup', 'lite', 'read-lifecycle', 'toolfilter', 'jsoncompact'],
+  aggressive: ['dedup', 'lite', 'read-lifecycle', 'toolfilter', 'jsoncompact', 'relevance', 'aging', 'hard-budget'],
+}
+
 type SectionId = 'general' | 'compression' | 'advanced' | 'preview'
 
 const SECTIONS = [
@@ -297,6 +309,26 @@ const SECTIONS = [
 ] as const satisfies ReadonlyArray<{ id: SectionId; tKey: string; icon: typeof Gauge }>
 
 type CompressionState = ReturnType<typeof useCompressionSettings>
+
+// The dialog must render usable controls no matter what the server returns —
+// a stale/old server may answer with a legacy shape (or an error object after
+// a failed save). Normalizing here guarantees `mode` is always one of the
+// OptionBar values (so a pill is always pre-selected) and `engines` is always
+// a record (so the engine switches can't crash the render).
+const COMPRESSION_MODES = ['off', 'lossless', 'standard', 'aggressive'] as const
+
+function normalizeConfig(raw: CompressionConfig | null | undefined): CompressionConfig {
+  const mode = raw && (COMPRESSION_MODES as readonly string[]).includes(raw.mode)
+    ? raw.mode
+    : 'off'
+  return {
+    ...raw,
+    mode,
+    engines: raw?.engines ?? {},
+    trustProjectFilters: raw?.trustProjectFilters ?? false,
+    prefixFreeze: raw?.prefixFreeze ?? true,
+  }
+}
 
 // Compression config/stats are loaded once per dialog opening and shared by the
 // Compression, Advanced and Preview sections, so switching sections never
@@ -316,7 +348,7 @@ function useCompressionSettings(open: boolean) {
       apiFetch<CompressionStats>('/api/compression/stats'),
     ]).then(([nextConfig, nextStats]) => {
       if (cancelled) return
-      setConfig(nextConfig)
+      setConfig(normalizeConfig(nextConfig))
       setStats(nextStats)
       setError('')
     }).catch(reason => {
@@ -343,10 +375,10 @@ function useCompressionSettings(open: boolean) {
     setBusy('save')
     setError('')
     try {
-      setConfig(await apiFetch<CompressionConfig>('/api/settings/compression', {
+      setConfig(normalizeConfig(await apiFetch<CompressionConfig>('/api/settings/compression', {
         method: 'PUT',
         body: JSON.stringify(config),
-      }))
+      })))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t('common.unknownError'))
     } finally {
@@ -369,6 +401,21 @@ function CompressionSection({ state }: { state: CompressionState }) {
     { value: 'aggressive', label: t('settings.compressionAggressive') },
   ]
 
+  // Mode pills double as presets for the engine switches below (see
+  // MODE_ENGINE_PRESETS). Per-engine params other than `enabled` are kept.
+  const applyModePreset = (mode: CompressionMode) => {
+    const preset = MODE_ENGINE_PRESETS[mode]
+    patch(preset.length === 0 ? { mode } : {
+      mode,
+      engines: Object.fromEntries(
+        ENGINES.map(engine => [
+          engine.id,
+          { ...(config.engines[engine.id] ?? {}), enabled: preset.includes(engine.id) },
+        ]),
+      ),
+    })
+  }
+
   return (
     <>
       <SectionHeader
@@ -379,7 +426,7 @@ function CompressionSection({ state }: { state: CompressionState }) {
       <Row label={t('settings.compressionMode')} hint={t('settings.compressionModeHelp')}>
         <OptionBar
           value={config.mode}
-          onValueChange={mode => patch({ mode })}
+          onValueChange={applyModePreset}
           options={modes}
           ariaLabel={t('settings.compressionMode')}
           className="grid-cols-2 sm:grid-cols-4"

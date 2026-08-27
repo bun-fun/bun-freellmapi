@@ -50,3 +50,53 @@ describe('settings dialog i18n', () => {
     }
   })
 })
+
+describe('compression mode presets', () => {
+  // The dialog applies MODE_ENGINE_PRESETS to the engine switches when a mode
+  // pill is clicked; it must mirror MODE_ENGINES in the server pipeline or the
+  // preselected switches would lie about what the chosen mode actually runs.
+  function parseClientPresets(): Record<string, string[]> {
+    const block = source.match(/MODE_ENGINE_PRESETS[^=]*= \{([\s\S]*?)\n\}/)
+    expect(block, 'MODE_ENGINE_PRESETS not found in settings-dialog.tsx').toBeTruthy()
+    return Object.fromEntries(
+      [...block![1].matchAll(/(\w+): \[([^\]]*)\]/g)].map(match => [
+        match[1],
+        [...match[2].matchAll(/'([^']+)'/g)].map(id => id[1]),
+      ]),
+    )
+  }
+
+  function parseServerPresets(): Record<string, string[]> {
+    const pipeline = readFileSync(
+      path.join(here, '../../../server/src/services/compression/pipeline.ts'),
+      'utf8',
+    )
+    const block = pipeline.match(/const MODE_ENGINES[^=]*= \{([\s\S]*?)\n\}/)
+    expect(block, 'MODE_ENGINES not found in pipeline.ts').toBeTruthy()
+    return Object.fromEntries(
+      [...block![1].matchAll(/(\w+): new Set\(([\s\S]*?)\)/g)].map(match => [
+        match[1],
+        [...match[2].matchAll(/'([^']+)'/g)].map(id => id[1]),
+      ]),
+    )
+  }
+
+  it('mirrors MODE_ENGINES in the server compression pipeline', () => {
+    const client = parseClientPresets()
+    const server = parseServerPresets()
+    expect(Object.keys(client).sort()).toEqual(['aggressive', 'lossless', 'off', 'standard'])
+    for (const mode of ['lossless', 'standard', 'aggressive'] as const) {
+      expect(client[mode], `mode ${mode} preset drift`).toEqual(server[mode])
+    }
+  })
+
+  it('presets only reference engines the dialog renders', () => {
+    const ids = [...source.matchAll(/\{ id: '([^']+)', tKey: '[^']+', lossless:/g)].map(match => match[1])
+    const client = parseClientPresets()
+    for (const preset of Object.values(client)) {
+      for (const engine of preset) {
+        expect(ids, `${engine} is not a rendered engine`).toContain(engine)
+      }
+    }
+  })
+})
