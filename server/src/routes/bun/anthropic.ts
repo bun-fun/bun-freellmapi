@@ -7,8 +7,10 @@ import type {
 } from '@freellmapi/shared/types.js';
 import {
   routeRequest,
+  resolveModelGroupCandidates,
   routingReserveTokens,
   type RouteResult,
+  type ChainRow,
 } from '../../services/router.js';
 import { getUnifiedApiKey } from '../../db/index.js';
 import { contentToString } from '../../lib/content.js';
@@ -18,6 +20,7 @@ import { logRequest } from '../../lib/request-log.js';
 import { sanitizeProviderErrorMessage } from '../../lib/error-redaction.js';
 import { isUpstreamClassificationOutput } from '../../lib/error-classify.js';
 import { resolveAnthropicModel } from '../../services/anthropic-map.js';
+import { isUnifyEnabled, getModelGroups, resolveRequestedIdForDispatch } from '../../services/model-groups.js';
 import { z } from 'zod';
 import type { ReasoningEffort } from '../../lib/sampling-params.js';
 import {
@@ -383,6 +386,34 @@ export async function anthropicRoute(req: Request, _url: URL): Promise<Response>
   // Resolve the model through the operator's Claude-family map
   const resolved = resolveAnthropicModel(routedModel);
   let preferredModel = resolved.preferredModelDbId;
+
+  // Same-model cross-provider failover (#932). A pin resolves to ONE catalog
+  // row, and until now that row was the only thing the request preferred: when
+  // its provider failed, the loop walked the rest of the catalog and answered
+  // with a completely different model. The OpenAI, Responses and inbound-chat
+  // surfaces already avoid that by routing a pinned id over its unified model
+  // group as a STRICT chain (#335) — every provider serving the same logical
+  // model, and nothing else. Build the identical chain here so /v1/messages
+  // behaves the same.
+  //
+  // Only the pinned paths change. A Claude family alias mapped to 'auto' (the
+  // default for opus/sonnet/haiku/default) resolves to no model at all and
+  // keeps auto-routing over the full chain exactly as before. When unify is
+  // disabled, or the pinned id has no group members, the legacy single-row pin
+  // is kept (this surface is lenient — it never fails an otherwise-routable
+  // request over grouping).
+  let groupChain: ChainRow[] | undefined;
+  if (resolved.modelId) {
+    const dispatch = isUnifyEnabled() ? resolveRequestedIdForDispatch(resolved.modelId, getModelGroups()) : null;
+    const members = dispatch?.memberDbIds ?? null;
+    if (members && members.length > 0) {
+      const chain = resolveModelGroupCandidates(members, dispatch!.demotedDbIds);
+      // An empty chain means the pinned row is no longer routable at all; keep
+      // the legacy single-row pin rather than failing the request. routeRequest
+      // injects a missing preferred row at the front, so the pin still holds.
+      if (chain.length > 0) groupChain = chain;
+    }
+  }
   if (preferredModel == null) preferredModel = undefined;
 
   // ── Shared fallback loop hooks ──────────────────────────────────────────
@@ -403,6 +434,7 @@ export async function anthropicRoute(req: Request, _url: URL): Promise<Response>
         hasImage,
         wantsTools,
         undefined, // skipModels — managed by the loop via state.skipModels
+        groupChain,
       );
     },
 
