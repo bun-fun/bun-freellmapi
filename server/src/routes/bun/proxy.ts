@@ -110,6 +110,9 @@ const chatCompletionSchema = z.object({
   tools: z.array(toolDefinitionSchema).optional(),
   tool_choice: toolChoiceSchema.optional(),
   parallel_tool_calls: z.boolean().optional(),
+  stream_options: z.object({
+    include_usage: z.boolean().optional(),
+  }).optional(),
 });
 
 const MAX_RETRIES = 20;
@@ -201,7 +204,7 @@ export async function proxyRoute(req: Request, _url: URL): Promise<Response> {
 
     const {
       model: requestedModel, temperature, max_tokens, top_p, stream,
-      tools, tool_choice, parallel_tool_calls, messages: rawMessages
+      tools, tool_choice, parallel_tool_calls, messages: rawMessages, stream_options
     } = parsed.data;
 
     const messages: ChatMessage[] = rawMessages.map((m: any): ChatMessage => {
@@ -280,17 +283,46 @@ export async function proxyRoute(req: Request, _url: URL): Promise<Response> {
       try {
         if (stream) {
           // Streaming
+          const includeUsage = stream_options?.include_usage === true;
           const gen = route.provider.streamChatCompletion(
             route.apiKey, dispatchMessages, route.modelId,
-            { temperature, max_tokens, top_p, tools, tool_choice, parallel_tool_calls },
+            { temperature, max_tokens, top_p, tools, tool_choice, parallel_tool_calls, stream_options },
           );
 
           let totalOutputTokens = 0;
+          let usageChunk: any = null;
+          let lastMeta: any = {};
           const stream = new ReadableStream({
             async pull(controller) {
               try {
                 const { value, done } = await gen.next();
                 if (done) {
+                  // #686: some OpenAI-compatible upstreams never echo a final
+                  // usage frame even when stream_options.include_usage is
+                  // requested. Strict clients treat a missing usage block as
+                  // "no accounting happened". When the client asked for usage
+                  // and the upstream sent none, inject this gateway's own
+                  // chars/4 estimate, flagged `estimated: true`.
+                  if (includeUsage && !usageChunk) {
+                    const promptTokens = estimatedInputTokens;
+                    const completionTokens = totalOutputTokens;
+                    const injected = new TextEncoder().encode(
+                      `data: ${JSON.stringify({
+                        id: lastMeta.id ?? `chatcmpl-${Date.now()}`,
+                        object: 'chat.completion.chunk',
+                        created: lastMeta.created ?? Math.floor(Date.now() / 1000),
+                        model: lastMeta.model ?? route.modelId,
+                        choices: [],
+                        usage: {
+                          prompt_tokens: promptTokens,
+                          completion_tokens: completionTokens,
+                          total_tokens: promptTokens + completionTokens,
+                          estimated: true,
+                        },
+                      })}\n\n`,
+                    );
+                    controller.enqueue(injected);
+                  }
                   const doneChunk = new TextEncoder().encode('data: [DONE]\n\n');
                   controller.enqueue(doneChunk);
                   controller.close();
@@ -306,6 +338,10 @@ export async function proxyRoute(req: Request, _url: URL): Promise<Response> {
                 const chunk = value;
                 const text = chunk.choices?.[0]?.delta?.content ?? '';
                 totalOutputTokens += Math.ceil(text.length / 4);
+                if (chunk.usage) usageChunk = chunk;
+                if (chunk.id) lastMeta.id = chunk.id;
+                if (chunk.created !== undefined) lastMeta.created = chunk.created;
+                if (chunk.model) lastMeta.model = chunk.model;
                 const data = `data: ${JSON.stringify(chunk)}\n\n`;
                 controller.enqueue(new TextEncoder().encode(data));
               } catch (err) {
