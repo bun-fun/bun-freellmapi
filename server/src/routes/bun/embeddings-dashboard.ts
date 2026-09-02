@@ -219,7 +219,10 @@ export async function embeddingsCustomRoute(req: Request): Promise<Response> {
     dimensions = await probeEmbeddingDimensions(baseUrl, storedKeyForMask, modelId);
   } catch (err: any) {
     const e = err instanceof EmbeddingsError ? err : new EmbeddingsError(String(err?.message ?? err), 502);
-    return jsonResponse({ error: { message: e.message.slice(0, 300) } }, e.status >= 400 && e.status < 600 ? e.status : 502);
+    // `upstream_error`, never `authentication_error`: this status is relayed
+    // from the operator's own endpoint, and a client that reads a bare 401 as
+    // "session expired" would sign the operator out for testing a bad key.
+    return jsonResponse({ error: { message: e.message.slice(0, 300), type: 'upstream_error' } }, e.status >= 400 && e.status < 600 ? e.status : 502);
   }
 
   const existing = db.prepare("SELECT DISTINCT dimensions FROM embedding_models WHERE family = ?").all(family) as { dimensions: number }[];

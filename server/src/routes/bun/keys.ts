@@ -722,7 +722,10 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
       });
     } catch (err: any) {
       if (err instanceof ModelDiscoveryError) {
-        return jsonResponse({ error: { message: err.message } }, err.status);
+        // `upstream_error`, never `authentication_error`: this status is relayed
+        // from the operator's own endpoint, and a client that reads a bare 401 as
+        // "session expired" would sign the operator out for testing a bad key.
+        return jsonResponse({ error: { message: err.message, type: 'upstream_error' } }, err.status);
       }
       return jsonResponse({ error: { message: `Model discovery failed: ${err?.message ?? 'unknown error'}` } }, 502);
     }
@@ -779,7 +782,10 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
       return jsonResponse({ modelId: probe.modelId, latencyMs: probe.latencyMs });
     } catch (err: any) {
       if (err instanceof ModelDiscoveryError) {
-        return jsonResponse({ error: { message: err.message } }, err.status);
+        // `upstream_error`, never `authentication_error`: this status is relayed
+        // from the operator's own endpoint, and a client that reads a bare 401 as
+        // "session expired" would sign the operator out for testing a bad key.
+        return jsonResponse({ error: { message: err.message, type: 'upstream_error' } }, err.status);
       }
       return jsonResponse({ error: { message: `Probe failed: ${err?.message ?? 'unknown error'}` } }, 502);
     }
