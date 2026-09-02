@@ -59,6 +59,10 @@ export interface CustomModelSyncResult {
   skipped: number;
   /** Models skipped because they matched no free pattern (#746). */
   paidSkipped: number;
+  /** Models skipped because they are discernibly not chat models — embedding,
+   *  image, audio, transcription or video ids (#1051). Registering those as
+   *  chat models is how they used to 404 forever. */
+  nonChatSkipped: number;
   failures: Array<{ baseUrl: string; error: string }>;
 }
 
@@ -66,7 +70,7 @@ export interface CustomModelSyncResult {
  *  that wants a manual pass) can run it directly without waiting for the timer. */
 export async function runCustomModelSync(db: Db): Promise<CustomModelSyncResult> {
   const endpoints = listCustomEndpoints(db);
-  const result: CustomModelSyncResult = { endpoints: endpoints.length, added: 0, skipped: 0, paidSkipped: 0, failures: [] };
+  const result: CustomModelSyncResult = { endpoints: endpoints.length, added: 0, skipped: 0, paidSkipped: 0, nonChatSkipped: 0, failures: [] };
 
   for (const endpoint of endpoints) {
     try {
@@ -86,6 +90,14 @@ export async function runCustomModelSync(db: Db): Promise<CustomModelSyncResult>
       for (const model of discovered) {
         if (registeredIds.has(model.id)) {
           result.skipped += 1;
+          continue;
+        }
+        // #1051: a diffusion/whisper/video/embedding id is not a chat model,
+        // and registering it here is how it ends up 404ing in every chain.
+        // The sync only ADDS chat models; media and embedding models go
+        // through their own explicit registration paths.
+        if (model.kind !== undefined) {
+          result.nonChatSkipped += 1;
           continue;
         }
         // Free-only policy (#746): when FREE_PATTERNS is configured, a model

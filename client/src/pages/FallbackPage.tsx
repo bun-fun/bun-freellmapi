@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   DndContext,
@@ -115,15 +115,26 @@ export default function FallbackPage() {
   const strategy: RoutingStrategy = routing?.strategy ?? 'balanced'
   const isManual = strategy === 'priority'
 
-  // Merge fallback metadata with live scores, keyed by model.
-  const scoreById = new Map((routing?.scores ?? []).map(s => [s.modelDbId, s]))
-  const allEntries = localEntries ?? entries
-  const configured = allEntries.filter(e => e.keyCount > 0)
-  const unconfiguredPlatforms = [...new Set(allEntries.filter(e => e.keyCount === 0).map(e => e.platform))]
+  // Merge fallback metadata with live scores, keyed by model (#1047: memoized
+  // so a refetch of the 15s routing poll doesn't rebuild every derived structure
+  // on each tick — that rebuild was the "absurdly slow" feel on big catalogs).
+  const scoreById = useMemo(
+    () => new Map((routing?.scores ?? []).map(s => [s.modelDbId, s])),
+    [routing?.scores],
+  )
+  const allEntries = useMemo(() => localEntries ?? entries, [localEntries, entries])
+  const configured = useMemo(() => allEntries.filter(e => e.keyCount > 0), [allEntries])
+  const unconfiguredPlatforms = useMemo(
+    () => [...new Set(allEntries.filter(e => e.keyCount === 0).map(e => e.platform))],
+    [allEntries],
+  )
 
   // Entry fields win on overlap: the routing snapshot also carries `enabled`
   // (and identity fields), which would otherwise clobber unsaved local toggles.
-  const rows: Row[] = configured.map(e => ({ ...(scoreById.get(e.modelDbId) ?? {}), ...e }))
+  const rows: Row[] = useMemo(
+    () => configured.map(e => ({ ...(scoreById.get(e.modelDbId) ?? {}), ...e })),
+    [configured, scoreById],
+  )
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -138,16 +149,16 @@ export default function FallbackPage() {
 
   // ── Model unification: a model served by several providers is always shown as
   // one logical row that links to its own page (the on/off toggle was removed). ─
-  const orderedGroups = buildGroups(rows, isManual)
+  const orderedGroups = useMemo(() => buildGroups(rows, isManual), [rows, isManual])
 
   // Catalog search + filters (#343). Filtering operates on whole logical-model
   // groups; rank stays the model's position in the full chain so the numbers
   // don't renumber as you filter. Drag-to-reorder is only offered over the full,
   // unfiltered manual chain (reordering a filtered subset would be ambiguous).
-  const rankByKey = new Map(orderedGroups.map((g, i) => [g.key, i + 1]))
+  const rankByKey = useMemo(() => new Map(orderedGroups.map((g, i) => [g.key, i + 1])), [orderedGroups])
   const query = search.trim().toLowerCase()
   const filtersActive = query !== '' || filterVision || filterTools || minContext > 0
-  const visibleGroups = orderedGroups.filter(g => {
+  const visibleGroups = useMemo(() => orderedGroups.filter(g => {
     if (filterVision && !g.members.some(m => m.supportsVision)) return false
     if (filterTools && !g.members.some(m => m.supportsTools)) return false
     if (minContext > 0 && groupMaxContext(g.members) < minContext) return false
@@ -162,7 +173,7 @@ export default function FallbackPage() {
       if (!hay.includes(query)) return false
     }
     return true
-  })
+  }), [orderedGroups, filterVision, filterTools, minContext, query])
   const draggable = isManual && !filtersActive
 
   // Progressive rendering: grow the row budget whenever the sentinel below the

@@ -7,9 +7,10 @@ import { resolveProvider, getAllProviders } from '../../providers/index.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds } from '../../services/custom-endpoint.js';
 import { normalizeBaseUrl } from '../../lib/endpoint-scope.js';
 import { assessProviderUrl } from '../../lib/url-guard.js';
-import { discoverEndpointModels, probeEndpointModel, ModelDiscoveryError } from '../../services/model-discovery.js';
+import { discoverEndpointModels, probeEndpointModel, classifyModelId, ModelDiscoveryError } from '../../services/model-discovery.js';
 import { clearCooldownsForKey, getActiveCooldownsForKeys } from '../../services/ratelimit.js';
 import { registerCustomChatModels, type CustomModelEntry } from '../../services/custom-model-register.js';
+import { registerCustomMediaModel } from '../../services/custom-media-register.js';
 import { probeEmbeddingDimensions, registerCustomEmbeddingModel } from '../../services/embeddings.js';
 import { parseKeysFromFile, stripTrailingCommas, stripJsoncComments } from '../../lib/key-parser.js';
 
@@ -176,8 +177,18 @@ async function registerImportedModels(
   models: Array<{ id: string; supportsTools?: boolean; supportsVision?: boolean }>,
   errors: Array<{ key: string; error: string }>,
 ): Promise<number> {
-  const chat = models.filter(m => !/embedding/i.test(m.id));
-  const embeds = models.filter(m => /embedding/i.test(m.id));
+  // #1051: classify by id, not just /embedding/. A whisper, diffusion or video
+  // id registered as a chat model 404s in every chain; they go to their own
+  // tables (or, for video, are skipped — nothing can serve a custom video
+  // model yet).
+  const kindOf = (id: string) => /embedding/i.test(id) ? 'embedding' : classifyModelId(id);
+  const chat = models.filter(m => kindOf(m.id) === undefined);
+  const embeds = models.filter(m => kindOf(m.id) === 'embedding');
+  const media = models.filter(m => {
+    const kind = kindOf(m.id);
+    return kind === 'image' || kind === 'audio' || kind === 'transcription';
+  });
+  const video = models.filter(m => kindOf(m.id) === 'video');
   let registered = 0;
 
   if (chat.length > 0) {
@@ -188,6 +199,22 @@ async function registerImportedModels(
       supportsVision: m.supportsVision,
     }));
     registered += db.transaction(() => registerCustomChatModels(db, baseUrl, keyId, entries))().length;
+  }
+
+  for (const m of media) {
+    try {
+      registerCustomMediaModel(db, keyId, {
+        modelId: m.id,
+        displayName: null,
+        modality: kindOf(m.id) as 'image' | 'audio' | 'transcription',
+      });
+      registered++;
+    } catch (err: any) {
+      errors.push({ key: `${keyName}: ${m.id}`, error: err?.message ?? 'media registration failed' });
+    }
+  }
+  for (const m of video) {
+    errors.push({ key: `${keyName}: ${m.id}`, error: 'video generation models are not supported on custom endpoints yet; skipped' });
   }
 
   for (const m of embeds) {
