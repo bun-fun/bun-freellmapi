@@ -232,10 +232,10 @@ describe('non-chat kind inferred from the model id (#1051)', () => {
 
   it('a VL model is never misclassified as a media model', () => {
     const [m] = parseModelCatalog({ data: [{ id: 'Qwen/Qwen2.5-VL-72B-Instruct' }] });
-    // This fork infers vision from metadata (visionOf), not from the id, so a
-    // bare-id VL entry has no vision verdict yet — but it must never gain a
-    // media kind. (Id-derived vision is a separate port.)
+    // A VL model is a chat model that sees: it gains vision (from the id, since
+    // this upstream ships bare ids) but stays a chat model — no media kind.
     expect(m.kind).toBeUndefined();
+    expect(m.vision).toBe(true);
   });
 
   it('does not read markers out of longer tokens', () => {
@@ -261,5 +261,65 @@ describe('non-chat kind inferred from the model id (#1051)', () => {
   it("ignores OpenAI's uninformative object:'model'", () => {
     const [m] = parseModelCatalog({ data: [{ id: 'gpt-x', object: 'model' }] });
     expect(m.kind).toBeUndefined();
+  });
+});
+
+// #1051: an upstream that returns bare ids gives visionOf nothing to read, so a
+// VL model arrives looking exactly like a chat one. The id is the only signal
+// left. This fork reads vision from the id only when the upstream advertised
+// no modality metadata whatsoever (`??`, never `||`).
+describe('vision inferred from the model id (#1051)', () => {
+  it('flags a VL model an upstream ships with no modality metadata', () => {
+    expect(parseModelCatalog({
+      data: [{ id: 'Qwen/Qwen2.5-VL-72B-Instruct' }],
+    })).toEqual([
+      { id: 'Qwen/Qwen2.5-VL-72B-Instruct', ownedBy: null, vision: true },
+    ]);
+  });
+
+  it('reads the version digits some VL ids carry', () => {
+    const [m] = parseModelCatalog({ data: [{ id: 'deepseek-ai/deepseek-vl2' }] });
+    expect(m.vision).toBe(true);
+  });
+
+  it('flags the named vision families', () => {
+    const ids = ['llava-1.5-7b', 'OpenGVLab/InternVL2-8B', 'mistralai/Pixtral-12B', 'llama-3.2-11b-vision'];
+    for (const id of ids) {
+      const [m] = parseModelCatalog({ data: [{ id }] });
+      expect(m.vision, id).toBe(true);
+    }
+  });
+
+  it('flags a bare string entry the same way', () => {
+    expect(parseModelCatalog(['Qwen2-VL-7B'])).toEqual([
+      { id: 'Qwen2-VL-7B', ownedBy: null, vision: true },
+    ]);
+  });
+
+  it('does not read `vl` out of a longer token', () => {
+    for (const id of ['vllm-proxy/qwen3-4b', 'acme-vlab-7b']) {
+      const [m] = parseModelCatalog({ data: [{ id }] });
+      expect(m.vision, id).toBeUndefined();
+    }
+  });
+
+  it('leaves a text-only id with no vision key at all', () => {
+    expect(parseModelCatalog({ data: [{ id: 'qwen3-4b' }] })).toEqual([
+      { id: 'qwen3-4b', ownedBy: null },
+    ]);
+  });
+
+  it('keeps an explicit upstream false over the id marker', () => {
+    const [m] = parseModelCatalog({
+      data: [{ id: 'some-vl-router', vision: false }],
+    });
+    expect(m.vision).toBe(false);
+  });
+
+  it('keeps upstream modality metadata authoritative when present', () => {
+    const [m] = parseModelCatalog({
+      data: [{ id: 'plain-chat-model', architecture: { input_modalities: ['text', 'image'] } }],
+    });
+    expect(m.vision).toBe(true);
   });
 });

@@ -83,6 +83,13 @@ const VISION_KEYS = ['vision', 'supports_vision', 'supportsVision', 'image_input
 const MODALITY_KEYS = ['modalities', 'input_modalities', 'inputModalities', 'modality'] as const;
 // A modality entry (or a substring of the modality string) that means images.
 const VISION_MODALITIES = ['image', 'vision', 'image-input'] as const;
+// #1051: some OpenAI-compatible upstreams (SiliconFlow among them) answer
+// /v1/models with entries that carry an id and nothing else, so visionOf finds
+// no signal at all and a VL model is indistinguishable from a chat one. These
+// id markers are the last resort. They are matched per token (the id split on
+// non-alphanumerics), never as a substring, so a relay that ships `vllm` in an
+// id cannot read as `vl`.
+const VISION_ID_MARKERS = ['llava', 'internvl', 'pixtral', 'moondream', 'cogvlm', 'vision'] as const;
 // A price hint sits in a chip next to the model id, so a chatty relay must not
 // be able to squeeze the id out of the row.
 const MAX_PRICE_NOTE_LENGTH = 40;
@@ -212,6 +219,20 @@ function visionOf(record: Record<string, unknown>): boolean | undefined {
   return architecture ? modalityVision(architecture) : undefined;
 }
 
+/** Vision read off the model id, for upstreams that advertise no modality
+ *  metadata whatsoever (#1051). Returns true or undefined and never false: a
+ *  missing marker is not evidence that a model lacks vision, and a false here
+ *  would stamp `vision: false` onto every bare `{ id }` entry. */
+function visionFromId(id: string): true | undefined {
+  for (const token of id.toLowerCase().split(/[^a-z0-9]+/)) {
+    // `vl`/`vlm` plus the version digits some ids carry (`vl2`), anchored to a
+    // whole token so `vllm` and `vlab` stay out.
+    if (/^vlm?\d*$/.test(token)) return true;
+    if (VISION_ID_MARKERS.some(marker => token.includes(marker))) return true;
+  }
+  return undefined;
+}
+
 // #1051, the non-vision half: an upstream that answers with bare ids gives us
 // no `object`/`type` to read (SiliconFlow ships none at all), so a diffusion,
 // whisper or video model registers as a chat model and then 404s forever. The
@@ -295,6 +316,8 @@ function toDiscovered(entry: unknown): DiscoveredModel | null {
     const bare: DiscoveredModel = { id, ownedBy: null };
     const bareKind = classifyModelId(id);
     if (bareKind !== undefined) bare.kind = bareKind;
+    const bareVision = visionFromId(id);
+    if (bareVision !== undefined) bare.vision = bareVision;
     return bare;
   }
   const record = asRecord(entry);
@@ -312,7 +335,8 @@ function toDiscovered(entry: unknown): DiscoveredModel | null {
     model.priceNote = price.note;
     model.isFree = price.isFree;
   }
-  const vision = visionOf(record);
+  // `??` not `||`: an upstream that explicitly says false keeps saying false.
+  const vision = visionOf(record) ?? visionFromId(id);
   if (vision !== undefined) model.vision = vision;
   // Metadata wins over the id; a vision verdict wins over both — a VL model is
   // a chat model that sees, not a media model (#1051).
