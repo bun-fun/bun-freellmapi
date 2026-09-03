@@ -58,6 +58,11 @@ export interface FallbackEntry {
 
 export type RoutingStrategy = 'priority' | 'balanced' | 'smartest' | 'fastest' | 'reliable' | 'custom'
 
+// How the gateway picks between several keys of ONE platform, once a model has
+// been chosen (#919). Separate from RoutingStrategy, which ranks models: the
+// two are independent knobs and the Fallback page sets them side by side.
+export type KeySelectionStrategy = 'auto' | 'least-remaining'
+
 export type RoutingWeights = { reliability: number; speed: number; intelligence: number }
 
 export interface RoutingScore {
@@ -79,6 +84,9 @@ export interface RoutingData {
    *  be tried so they build reliability/speed data (#685 follow-up). Required:
    *  the server always sends it, and the checkbox renders straight from it. */
   exploreEnabled: boolean
+  /** Key-selection policy (#919). Required for the same reason as
+   *  exploreEnabled: the picker renders straight from GET /routing. */
+  keySelectionStrategy: KeySelectionStrategy
   scores: (RoutingScore & { platform: string; modelId: string; displayName: string; enabled: boolean })[]
 }
 

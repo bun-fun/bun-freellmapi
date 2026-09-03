@@ -276,6 +276,10 @@
   "strategies": {
     "explore": "Explore unmeasured models",
     "exploreHint": "Give models without reliability/speed data a 10% chance to be tried so they build samples.",
+    "keySelection": "Key selection",
+    "keySelectionAuto": "Auto",
+    "keySelectionLeastRemaining": "Least remaining",
+    "keySelectionHint": "How to choose between several keys on the same provider. Auto keeps the current rotation; Least remaining ranks keys by observed quota and tries the one with the most left first.",
     "title": "Routing strategy",
     "description": "Pick a routing strategy. In Manual mode you drag to set the order; the other strategies route by live score across reliability, speed and intelligence.",
     "weightsSummary": "reliability {reliability}% · speed {speed}% · intelligence {intelligence}%",

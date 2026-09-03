@@ -28,6 +28,7 @@ import {
   type RoutingData,
   type RoutingStrategy,
   type RoutingWeights,
+  type KeySelectionStrategy,
   type Row,
   type TokenUsageData,
 } from '@/lib/routing'
@@ -108,12 +109,13 @@ export default function FallbackPage() {
   })
 
   const strategyMutation = useMutation({
-    mutationFn: (payload: { strategy: RoutingStrategy; weights?: RoutingWeights; exploreEnabled?: boolean }) =>
+    mutationFn: (payload: { strategy: RoutingStrategy; weights?: RoutingWeights; exploreEnabled?: boolean; keySelectionStrategy?: KeySelectionStrategy }) =>
       apiFetch('/api/fallback/routing', { method: 'PUT', body: JSON.stringify(payload) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['fallback', 'routing'] }),
   })
 
   const strategy: RoutingStrategy = routing?.strategy ?? 'balanced'
+  const keySelection: KeySelectionStrategy = routing?.keySelectionStrategy ?? 'auto'
   const isManual = strategy === 'priority'
 
   // Merge fallback metadata with live scores, keyed by model (#1047: memoized
@@ -276,6 +278,26 @@ export default function FallbackPage() {
               />
             )}
           </div>
+
+          {/* Key selection (#919). A separate knob from the strategy above:
+              that one ranks MODELS, this one picks between several keys of
+              the same provider. Shown in every mode — manual chain order
+              still leaves the choice of key open. */}
+          <label className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
+            <span>{t('strategies.keySelection')}</span>
+            <select
+              value={keySelection}
+              disabled={strategyMutation.isPending}
+              onChange={e => strategyMutation.mutate({ strategy, keySelectionStrategy: e.target.value as KeySelectionStrategy })}
+              className="rounded-lg border bg-background px-2 py-1.5 text-xs text-foreground"
+            >
+              <option value="auto">{t('strategies.keySelectionAuto')}</option>
+              <option value="least-remaining">{t('strategies.keySelectionLeastRemaining')}</option>
+            </select>
+            <Tooltip text={t('strategies.keySelectionHint')}>
+              <span className="cursor-help underline decoration-dotted underline-offset-2">?</span>
+            </Tooltip>
+          </label>
 
           <p className="mt-2 text-xs text-muted-foreground">
             {isManual ? t('strategies.modeManualHint') : t('strategies.modeScoreHint')}

@@ -33,6 +33,14 @@ export interface RoutingWeights {
 // router.ts). Each is just a weight vector — the engine is identical.
 export type RoutingStrategy = 'priority' | 'balanced' | 'smartest' | 'fastest' | 'reliable' | 'custom';
 
+// How the router picks BETWEEN several keys of one platform, once a model has
+// been chosen. Deliberately not a RoutingStrategy: model ranking and key
+// selection are independent choices, and folding this into the strategy enum
+// would mean switching key policy also switches (or disables) the model bandit.
+// 'auto' is the historical behaviour — per-key bandit score, else round-robin.
+// 'least-remaining' additionally ranks by observed remaining quota (#919).
+export type KeySelectionStrategy = 'auto' | 'least-remaining';
+
 export const BANDIT_PRESETS: Record<Exclude<RoutingStrategy, 'priority' | 'custom'>, RoutingWeights> = {
   // Reliability leads; speed and intelligence split the rest evenly.
   balanced: { reliability: 0.5, speed: 0.25, intelligence: 0.25 },

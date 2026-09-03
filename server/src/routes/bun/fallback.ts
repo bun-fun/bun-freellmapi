@@ -4,8 +4,10 @@ import {
   getRoutingScores,
   setRoutingStrategy,
   setCustomWeights,
+  getKeySelectionStrategy,
+  setKeySelectionStrategy,
 } from '../../services/router.js';
-import type { RoutingStrategy, RoutingWeights } from '../../services/scoring.js';
+import type { RoutingStrategy, RoutingWeights, KeySelectionStrategy } from '../../services/scoring.js';
 import { jsonResponse } from '../../lib/json.js';
 
 export async function fallbackRoute(req: Request, url: URL): Promise<Response> {
@@ -189,9 +191,10 @@ export async function fallbackRoute(req: Request, url: URL): Promise<Response> {
 
   if (path === '/api/fallback/routing' && req.method === 'PUT') {
     try {
-      const body = await req.json() as { strategy?: string; weights?: RoutingWeights };
+      const body = await req.json() as { strategy?: string; weights?: RoutingWeights; keySelectionStrategy?: KeySelectionStrategy };
       setRoutingStrategy((body.strategy ?? 'balanced') as RoutingStrategy);
       if (body.weights) setCustomWeights(body.weights);
+      if (body.keySelectionStrategy !== undefined) setKeySelectionStrategy(body.keySelectionStrategy);
       return jsonResponse({ success: true });
     } catch (err: any) {
       return jsonResponse({ error: { message: err.message } }, 400);

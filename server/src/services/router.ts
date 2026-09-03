@@ -16,6 +16,7 @@ import {
 } from './ratelimit.js';
 import {
   BANDIT_PRESETS, DEFAULT_STRATEGY, type RoutingStrategy, type RoutingWeights,
+  type KeySelectionStrategy,
   reliabilityPosterior, expectedReliability, sampleBeta,
   speedScore, intelligenceScore, intelligenceComposite, headroomFactor, rateLimitFactor, combineScore,
   observedSpeedRank, TIMEOUT_LATENCY_CAP_MS,
@@ -31,6 +32,7 @@ import { customEndpointKeyIds } from './custom-endpoint.js';
 import { isDegraded } from './degradation.js';
 import { modelStatsKey, endpointScopeForBaseUrl } from '../lib/endpoint-scope.js';
 import { parseModelScope, scopeAllows } from '../lib/model-scope.js';
+import { getKeyQuotaHeadroom, inferQuotaPoolKey } from './provider-quota.js';
 import type { BaseProvider } from '../providers/base.js';
 import type { Platform } from '@freellmapi/shared/types.js';
 import type { Db } from '../db/types.js';
@@ -365,6 +367,34 @@ export function getExploreEnabled(): boolean {
 
 export function setExploreEnabled(enabled: boolean): void {
   setSetting(EXPLORE_KEY, enabled ? '1' : '0');
+}
+
+// ── Key selection strategy (persisted) ─────────────────────────────────────
+// Which of a platform's several keys to reach for, once a model has been
+// picked. Independent of the routing strategy on purpose (#919): the strategy
+// enum drives the MODEL bandit, so putting a key policy in it would make
+// choosing a key policy also throw away the model ranking.
+//   'auto'            — unchanged: per-key bandit score when there is data,
+//                       round-robin otherwise.
+//   'least-remaining' — additionally rank by observed remaining quota, roomiest
+//                       key first, so the key closest to its cap is held back
+//                       instead of being the next one to 429.
+const KEY_SELECTION_KEY = 'key_selection_strategy';
+const VALID_KEY_SELECTIONS: KeySelectionStrategy[] = ['auto', 'least-remaining'];
+export const DEFAULT_KEY_SELECTION: KeySelectionStrategy = 'auto';
+
+export function getKeySelectionStrategy(): KeySelectionStrategy {
+  const raw = getSetting(KEY_SELECTION_KEY);
+  return (raw && VALID_KEY_SELECTIONS.includes(raw as KeySelectionStrategy))
+    ? (raw as KeySelectionStrategy)
+    : DEFAULT_KEY_SELECTION;
+}
+
+export function setKeySelectionStrategy(strategy: KeySelectionStrategy): void {
+  if (!VALID_KEY_SELECTIONS.includes(strategy)) {
+    throw new Error(`Unknown key selection strategy: ${strategy}`);
+  }
+  setSetting(KEY_SELECTION_KEY, strategy);
 }
 
 // ── Custom weights (persisted) ──────────────────────────────────────────────
@@ -1107,6 +1137,48 @@ function orderKeysByScore(entry: ChainRow, keys: KeyRow[]): KeyRow[] | null {
     .map(x => x.k);
 }
 
+/** Headroom assumed for a key the quota tracker has never seen. Neutral on
+ *  purpose: an unobserved budget is no reason to prefer a key (it could be
+ *  drained) and no reason to avoid one (it could be untouched), so it sorts
+ *  between an exhausted key and a fresh one and otherwise keeps its incoming
+ *  round-robin position. */
+const UNKNOWN_QUOTA_HEADROOM = 0.5;
+
+/**
+ * Whether remaining-quota weighting is meaningful for this chain entry: the
+ * operator asked for it AND the platform meters its keys separately.
+ *
+ * An account-scoped pool ('<platform>::account') is ONE budget every key of the
+ * account draws down, so "which key has more left" has no answer — every key
+ * reports the same number, and reordering on it would only churn the rotation
+ * for nothing (#919).
+ */
+function quotaWeightingApplies(entry: ChainRow): boolean {
+  if (getKeySelectionStrategy() !== 'least-remaining') return false;
+  return !inferQuotaPoolKey(entry.platform as Platform, entry.model_id).endsWith('::account');
+}
+
+/**
+ * Re-order an already-ordered candidate list by observed remaining quota,
+ * roomiest first (#919 — the issue asks for higher-remaining-first, so the key
+ * nearest its cap is tried last, not first).
+ *
+ * Deliberately a SORT over the caller's list rather than a second walk: the
+ * incoming order is the round-robin rotation (or the per-key bandit ranking),
+ * and Array#sort is stable, so keys with equal headroom — including the common
+ * case of no observations at all — keep exactly the order they would have had.
+ * Every gate, the custom-endpoint filter and the skip tally stay in the one
+ * walk that follows.
+ */
+function orderKeysByRemainingQuota(entry: ChainRow, ordered: KeyRow[]): KeyRow[] {
+  const headroom = getKeyQuotaHeadroom(entry.platform as Platform);
+  if (headroom.size === 0) return ordered;
+  // Hoisted out of the comparator: sort calls it O(n log n) times, and the
+  // lookup below must not re-derive anything per comparison.
+  const room = new Map(ordered.map(k => [k.id, headroom.get(k.id) ?? UNKNOWN_QUOTA_HEADROOM]));
+  return [...ordered].sort((a, b) => room.get(b.id)! - room.get(a.id)!);
+}
+
 /**
  * Pick a usable key for ONE model and build its RouteResult, or return null if
  * the model has no key that can serve the request right now (all cooled down,
@@ -1168,7 +1240,16 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
   // cursor over the platform's key list (#651).
   const rrKey = modelStatsKey(entry.platform, entry.model_id, entry.endpoint_scope);
   let idx = roundRobinIndex.get(rrKey) ?? 0;
-  const ranked = orderKeysByScore(entry, keys);
+  let ranked = orderKeysByScore(entry, keys);
+
+  // Remaining-quota weighting (#919) layers on top: it re-sorts whatever order
+  // we were going to walk anyway — the bandit ranking when there is per-key
+  // data, otherwise the round-robin rotation starting at the live cursor — so
+  // ties fall back to that order instead of to rowid.
+  if (keys.length > 1 && quotaWeightingApplies(entry)) {
+    const base = ranked ?? Array.from({ length: keys.length }, (_, i) => keys[(idx + i) % keys.length]);
+    ranked = orderKeysByRemainingQuota(entry, base);
+  }
 
   // A custom model belongs to exactly one endpoint (#212), but an endpoint can
   // hold several credentials — so the pool is every key on the same base_url,
@@ -1744,7 +1825,7 @@ export interface RoutingScore {
   totalRequests: number; // decay-weighted observations
 }
 
-export function getRoutingScores(): { strategy: RoutingStrategy; weights: RoutingWeights | null; customWeights: RoutingWeights; exploreEnabled: boolean; scores: RoutingScore[] } {
+export function getRoutingScores(): { strategy: RoutingStrategy; keySelectionStrategy: KeySelectionStrategy; weights: RoutingWeights | null; customWeights: RoutingWeights; exploreEnabled: boolean; scores: RoutingScore[] } {
   const db = getDb();
   const strategy = getRoutingStrategy();
   refreshStatsCache(db);
@@ -1805,8 +1886,9 @@ export function getRoutingScores(): { strategy: RoutingStrategy; weights: Routin
   // mode and the active preset otherwise.
   // exploreEnabled must ride along here too: the dashboard checkbox renders
   // from GET /routing, so omitting it would make the toggle look permanently
-  // off (and impossible to turn off) after a refetch.
-  return { strategy, weights: weightsFor(strategy), customWeights: getCustomWeights(), exploreEnabled: getExploreEnabled(), scores };
+  // off (and impossible to turn off) after a refetch. Same for the key
+  // selection picker (#919).
+  return { strategy, keySelectionStrategy: getKeySelectionStrategy(), weights: weightsFor(strategy), customWeights: getCustomWeights(), exploreEnabled: getExploreEnabled(), scores };
 }
 
 /**
