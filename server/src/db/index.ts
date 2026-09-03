@@ -6,8 +6,7 @@ import { initEncryptionKey } from '../lib/crypto.js';
 import {
   fetchModelsDev,
   filterFreeModels,
-  mapToFreellmapi,
-  computeRanks,
+  buildModelsDevEntries,
 } from '../services/modelsDev.js';
 import { seedCatalogModels } from '../services/catalog-seed.js';
 
@@ -98,6 +97,8 @@ function createTables(db: DatabaseType) {
       supports_vision INTEGER NOT NULL DEFAULT 0,
       supports_tools INTEGER NOT NULL DEFAULT 0,
       key_id INTEGER,
+      source TEXT NOT NULL DEFAULT 'catalog',
+      dev_managed INTEGER NOT NULL DEFAULT 0,
       UNIQUE(platform, model_id)
     );
 
@@ -384,6 +385,12 @@ function ensureSchemaCompat(db: DatabaseType) {
   // Migration: model_source_provenance
   ensureCol(db, 'models', 'source', "TEXT NOT NULL DEFAULT 'catalog'");
 
+  // models-dev-sync provenance: which `source='catalog'` rows were placed there
+  // by the periodic models.dev feed (as opposed to the signed catalog or the
+  // bundled catalog-seed). Only dev_managed rows are ever retired/disabled by
+  // the models.dev refresh, so a coexisting catalog can never be clobbered.
+  ensureCol(db, 'models', 'dev_managed', 'INTEGER NOT NULL DEFAULT 0');
+
   // Migration: media_model_meta
   ensureCol(db, 'media_models', 'meta_json', 'TEXT');
 
@@ -561,6 +568,7 @@ function ensureModelsEndpointScopeUnique(db: DatabaseType) {
       paid_input_per_m REAL,
       paid_output_per_m REAL,
       source TEXT NOT NULL DEFAULT 'catalog',
+      dev_managed INTEGER NOT NULL DEFAULT 0,
       endpoint_scope TEXT NOT NULL DEFAULT '',
       UNIQUE(platform, model_id, endpoint_scope)
     );
@@ -806,25 +814,15 @@ async function seedModelsFromModelsDev(db: DatabaseType) {
     INSERT INTO models (
       platform, model_id, display_name, intelligence_rank, speed_rank,
       size_label, rpm_limit, rpd_limit, tpm_limit, tpd_limit,
-      monthly_token_budget, context_window, enabled
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      monthly_token_budget, context_window, enabled, dev_managed
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
   `);
 
   const insertFallback = db.prepare(
     'INSERT INTO fallback_config (model_db_id, priority, enabled) VALUES (?, ?, 1)'
   );
 
-  const mapped = freeModels.map((m) => {
-    const mappedModel = mapToFreellmapi(m);
-    const ranks = computeRanks(m);
-    const sizeLabel = guessSizeLabel(m.name);
-    return {
-      ...mappedModel,
-      intelligenceRank: ranks.intelligence,
-      speedRank: ranks.speed,
-      sizeLabel,
-    };
-  });
+  const mapped = buildModelsDevEntries(freeModels);
 
   // Sort by intelligence rank (lower = smarter) for fallback priority
   mapped.sort((a, b) => a.intelligenceRank - b.intelligenceRank);
@@ -862,17 +860,6 @@ async function seedModelsFromModelsDev(db: DatabaseType) {
   insertFallbacks();
 
   console.log(`[DB] Seeded ${mapped.length} free models from models.dev`);
-}
-
-function guessSizeLabel(name: string): string {
-  const n = name.toLowerCase();
-  if (n.includes('opus') || n.includes('o1') || n.includes('o3') || n.includes('claude-3.5') || n.includes('claude-4') || n.includes('gpt-4') || n.includes('gemini-pro') || n.includes('deepseek-v4') || n.includes('deepseek-r1')) {
-    return 'Frontier';
-  }
-  if (n.includes('flash') || n.includes('lite') || n.includes('nano') || n.includes('mini') || n.includes('xs') || n.includes('small') || n.includes('8b') || n.includes('1.2b')) {
-    return 'Small';
-  }
-  return 'Large';
 }
 
 function ensureAdminUser(db: DatabaseType) {

@@ -63,5 +63,14 @@ export async function modelsRoute(req: Request, _url: URL): Promise<Response> {
     return jsonResponse({ success: true, enabled: newEnabled === 1 });
   }
 
+  if (path === '/api/models/sync/models-dev' && req.method === 'POST') {
+    const { runModelsDevSync } = await import('../../services/models-dev-sync.js');
+    const result = await runModelsDevSync(getDb());
+    if (result === null) {
+      return jsonResponse({ success: false, error: 'models.dev fetch failed; last-good state kept' }, 502);
+    }
+    return jsonResponse({ success: true, ...result });
+  }
+
   return new Response('Not Found', { status: 404 });
 }

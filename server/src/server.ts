@@ -34,6 +34,7 @@ import {
 } from './routes/bun/ollama.js';
 import { urlTokenRoute } from './routes/bun/url-tokens.js';
 import { startCustomModelSync } from './services/custom-model-sync.js';
+import { startModelsDevSync } from './services/models-dev-sync.js';
 import {
   mediaListRoute, mediaUsageRoute, mediaCustomRoute,
   mediaUpdateRoute, mediaDeleteRoute,
@@ -371,6 +372,7 @@ async function start() {
   startHealthChecker(scheduler);
   startBackupScheduler();
   startCustomModelSync(getDb(), scheduler);
+  startModelsDevSync(getDb(), scheduler);
 }
 
 start().catch(console.error);

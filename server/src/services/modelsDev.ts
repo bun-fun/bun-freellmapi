@@ -133,3 +133,44 @@ export function computeRanks(model: ModelsDevModel): {
 
   return { intelligence, speed };
 }
+
+/** Coarse size label derived from the model name, shared by the one-shot seed
+ *  and the periodic models.dev refresh so the two never disagree. */
+export function guessSizeLabel(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes('opus') || n.includes('o1') || n.includes('o3') || n.includes('claude-3.5') || n.includes('claude-4') || n.includes('gpt-4') || n.includes('gemini-pro') || n.includes('deepseek-v4') || n.includes('deepseek-r1')) {
+    return 'Frontier';
+  }
+  if (n.includes('flash') || n.includes('lite') || n.includes('nano') || n.includes('mini') || n.includes('xs') || n.includes('small') || n.includes('8b') || n.includes('1.2b')) {
+    return 'Small';
+  }
+  return 'Large';
+}
+
+/** A fully-mapped, ready-to-insert models.dev entry. Every field the DB stores
+ *  for these rows is settled here so `seedModelsFromModelsDev` and the periodic
+ *  refresh produce byte-identical rows. */
+export interface ModelsDevEntry {
+  platform: string;
+  modelId: string;
+  displayName: string;
+  intelligenceRank: number;
+  speedRank: number;
+  sizeLabel: string;
+  contextWindow: number;
+}
+
+/** Map free models.dev models to insert-ready entries. Reused by the empty-DB
+ *  seed and the scheduled reconcile (models-dev-sync.ts). */
+export function buildModelsDevEntries(freeModels: ModelsDevModel[]): ModelsDevEntry[] {
+  return freeModels.map((m) => {
+    const mappedModel = mapToFreellmapi(m);
+    const ranks = computeRanks(m);
+    return {
+      ...mappedModel,
+      intelligenceRank: ranks.intelligence,
+      speedRank: ranks.speed,
+      sizeLabel: guessSizeLabel(m.name),
+    };
+  });
+}
