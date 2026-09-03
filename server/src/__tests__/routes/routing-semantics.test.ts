@@ -327,4 +327,23 @@ describe('key selection by remaining quota (#919)', () => {
     });
     expect(rejected.status).toBe(400);
   });
+
+  it('round-trips the peak-hours config through GET/PUT /api/fallback/routing', async () => {
+    const before = await request('GET', '/api/fallback/routing');
+    expect(before.status).toBe(200);
+    // Off by default; the server always sends the full config so the controls
+    // render from the snapshot.
+    expect(before.body.peakHours).toEqual({ enabled: false, startHour: 18, endHour: 6, timezone: 'UTC' });
+    expect(before.body.peakAdjusted).toBe(false);
+
+    const put = await request('PUT', '/api/fallback/routing', {
+      strategy: 'balanced',
+      peakHours: { enabled: true, startHour: 21, endHour: 7, timezone: 'America/New_York' },
+    });
+    expect(put.status).toBe(200);
+    expect(put.body.peakHours).toEqual({ enabled: true, startHour: 21, endHour: 7, timezone: 'America/New_York' });
+
+    const after = await request('GET', '/api/fallback/routing');
+    expect(after.body.peakHours).toEqual({ enabled: true, startHour: 21, endHour: 7, timezone: 'America/New_York' });
+  });
 });

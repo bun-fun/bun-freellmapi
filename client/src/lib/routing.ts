@@ -76,6 +76,28 @@ export interface RoutingScore {
   totalRequests: number
 }
 
+// Peak-hours routing (#760): in the configured time window, part of a mixed
+// preset's speed weight is shifted onto reliability so a loaded network prefers
+// the dependable provider over the fastest one. `fastest`/`reliable` are exempt
+// because they already sit at one end of that axis.
+export interface PeakHoursConfig {
+  enabled: boolean
+  /** Window start hour, inclusive, 0–23. */
+  startHour: number
+  /** Window end hour, exclusive, 0–23. May be < startHour (window spans midnight). */
+  endHour: number
+  /** IANA timezone name the hours are interpreted in. */
+  timezone: string
+}
+
+/** Strategies the peak adjustment leaves untouched (#760). */
+export const PEAK_EXEMPT_STRATEGIES: readonly RoutingStrategy[] = ['fastest', 'reliable']
+
+/** Whether this strategy opts out of the peak adjustment. */
+export function isPeakExemptStrategy(strategy: RoutingStrategy): boolean {
+  return PEAK_EXEMPT_STRATEGIES.includes(strategy)
+}
+
 export interface RoutingData {
   strategy: RoutingStrategy
   weights: RoutingWeights | null
@@ -87,6 +109,12 @@ export interface RoutingData {
   /** Key-selection policy (#919). Required for the same reason as
    *  exploreEnabled: the picker renders straight from GET /routing. */
   keySelectionStrategy: KeySelectionStrategy
+  /** Whether the weight summary shown above reflects a live peak-hour
+   *  adjustment rather than the base preset vector (#760). */
+  peakAdjusted: boolean
+  /** Peak-hours config. Required like the fields above: the controls render
+   *  straight from GET /routing. */
+  peakHours: PeakHoursConfig
   scores: (RoutingScore & { platform: string; modelId: string; displayName: string; enabled: boolean })[]
 }
 

@@ -307,6 +307,15 @@
     "weightSpeed": "Speed",
     "weightIntelligence": "Intelligence",
     "weightRequired": "At least one weight must be above zero.",
+    "peakHours": "Sharpen reliability during peak hours",
+    "peakHoursHint": "In the configured window, shift part of this preset's speed weight onto reliability so a busy network leans on its dependable providers. Applies only to the mixed presets (Balanced, Smartest); Fastest and Most reliable are left untouched.",
+    "peakHoursExempt": "the current strategy is exempt from this adjustment",
+    "peakWindow": "Window",
+    "peakStartHour": "Start hour (0–23)",
+    "peakEndHour": "End hour (0–23)",
+    "peakHoursWindowHint": "Hours of day, in the selected timezone, shown in 24-hour form. A start later than the end spans midnight; equal start and end means no window at all.",
+    "peakTimezone": "Timezone",
+    "peakHoursInvalid": "hours must be whole numbers 0–23",
     "scoreColumn": "Score"
   },
   "penaltyInspector": {

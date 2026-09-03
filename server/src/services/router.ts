@@ -17,6 +17,8 @@ import {
 import {
   BANDIT_PRESETS, DEFAULT_STRATEGY, type RoutingStrategy, type RoutingWeights,
   type KeySelectionStrategy,
+  peakAdjustedWeights, isValidPeakHour, isValidTimezone,
+  DEFAULT_PEAK_HOURS, type PeakHoursConfig,
   reliabilityPosterior, expectedReliability, sampleBeta,
   speedScore, intelligenceScore, intelligenceComposite, headroomFactor, rateLimitFactor, combineScore,
   observedSpeedRank, TIMEOUT_LATENCY_CAP_MS,
@@ -330,6 +332,10 @@ export function getAllPenalties(): Array<{ modelDbId: number; count: number; pen
 const STRATEGY_KEY = 'routing_strategy';
 const CUSTOM_WEIGHTS_KEY = 'routing_custom_weights';
 const EXPLORE_KEY = 'routing_explore_enabled';
+const PEAK_ADJUST_KEY = 'routing_peak_hours_adjust';
+const PEAK_START_KEY = 'routing_peak_start_hour';
+const PEAK_END_KEY = 'routing_peak_end_hour';
+const PEAK_TZ_KEY = 'routing_peak_timezone';
 const COMMUNITY_PRIOR_KEY = 'routing_community_prior';
 const COMMUNITY_PRIOR_ENABLED_KEY = 'routing_community_prior_enabled';
 
@@ -367,6 +373,42 @@ export function getExploreEnabled(): boolean {
 
 export function setExploreEnabled(enabled: boolean): void {
   setSetting(EXPLORE_KEY, enabled ? '1' : '0');
+}
+
+// ── Peak-hours adjustment (persisted, off by default) ──────────────────────
+// Opt-in time-of-day reweighting (#760). Everything about it is operator-set:
+// whether it runs at all, the window, and the timezone the window is read in.
+// With the flag off, weightsFor returns the presets byte-for-byte, so an
+// install that never touches this setting routes exactly as it did before.
+export function getPeakHoursConfig(): PeakHoursConfig {
+  const startRaw = Number.parseInt(getSetting(PEAK_START_KEY) ?? '', 10);
+  const endRaw = Number.parseInt(getSetting(PEAK_END_KEY) ?? '', 10);
+  const tzRaw = getSetting(PEAK_TZ_KEY);
+  return {
+    enabled: getSetting(PEAK_ADJUST_KEY) === '1',
+    startHour: isValidPeakHour(startRaw) ? startRaw : DEFAULT_PEAK_HOURS.startHour,
+    endHour: isValidPeakHour(endRaw) ? endRaw : DEFAULT_PEAK_HOURS.endHour,
+    timezone: isValidTimezone(tzRaw) ? tzRaw : DEFAULT_PEAK_HOURS.timezone,
+  };
+}
+
+/** Persist any subset of the peak-hours settings. Throws on an out-of-range
+ *  hour or an unknown IANA timezone so a bad PUT is rejected at the API rather
+ *  than silently stored and then ignored on read. */
+export function setPeakHoursConfig(patch: Partial<PeakHoursConfig>): void {
+  if (patch.startHour !== undefined && !isValidPeakHour(patch.startHour)) {
+    throw new Error('peakStartHour must be an integer between 0 and 23');
+  }
+  if (patch.endHour !== undefined && !isValidPeakHour(patch.endHour)) {
+    throw new Error('peakEndHour must be an integer between 0 and 23');
+  }
+  if (patch.timezone !== undefined && !isValidTimezone(patch.timezone)) {
+    throw new Error('peakTimezone must be a valid IANA timezone name');
+  }
+  if (patch.enabled !== undefined) setSetting(PEAK_ADJUST_KEY, patch.enabled ? '1' : '0');
+  if (patch.startHour !== undefined) setSetting(PEAK_START_KEY, String(patch.startHour));
+  if (patch.endHour !== undefined) setSetting(PEAK_END_KEY, String(patch.endHour));
+  if (patch.timezone !== undefined) setSetting(PEAK_TZ_KEY, patch.timezone);
 }
 
 // ── Key selection strategy (persisted) ─────────────────────────────────────
@@ -540,10 +582,25 @@ export function setCommunityPriors(priors: CommunityPriorMap): number {
   return Object.keys(clean).length;
 }
 
+/** Active weights plus whether the peak-hours adjustment (#760) changed them.
+ *  With the setting off (the default) `weights` is the preset itself and
+ *  `adjusted` is false, so nothing about routing moves with the clock.
+ *  priority/custom are the operator's explicit choice and are never rewritten. */
+function weightsWithPeak(strategy: RoutingStrategy): { weights: RoutingWeights | null; adjusted: boolean } {
+  if (strategy === 'priority') return { weights: null, adjusted: false };
+  if (strategy === 'custom') return { weights: getCustomWeights(), adjusted: false };
+  return peakAdjustedWeights(BANDIT_PRESETS[strategy], strategy, getPeakHoursConfig());
+}
+
 function weightsFor(strategy: RoutingStrategy): RoutingWeights | null {
-  if (strategy === 'priority') return null;
-  if (strategy === 'custom') return getCustomWeights();
-  return BANDIT_PRESETS[strategy];
+  return weightsWithPeak(strategy).weights;
+}
+
+/** The weight vector routing will use right now for the active strategy, and
+ *  whether the peak-hours adjustment moved it. Cheap (settings reads only) —
+ *  for the PUT /routing echo, which must not pay for a full score sweep. */
+export function getActiveRoutingWeights(): { weights: RoutingWeights | null; adjusted: boolean } {
+  return weightsWithPeak(getRoutingStrategy());
 }
 
 // ── Analytics stats cache (decay-weighted) ──────────────────────────────────
@@ -1825,7 +1882,7 @@ export interface RoutingScore {
   totalRequests: number; // decay-weighted observations
 }
 
-export function getRoutingScores(): { strategy: RoutingStrategy; keySelectionStrategy: KeySelectionStrategy; weights: RoutingWeights | null; customWeights: RoutingWeights; exploreEnabled: boolean; scores: RoutingScore[] } {
+export function getRoutingScores(): { strategy: RoutingStrategy; keySelectionStrategy: KeySelectionStrategy; weights: RoutingWeights | null; customWeights: RoutingWeights; exploreEnabled: boolean; peakAdjusted: boolean; peakHours: PeakHoursConfig; scores: RoutingScore[] } {
   const db = getDb();
   const strategy = getRoutingStrategy();
   refreshStatsCache(db);
@@ -1888,7 +1945,20 @@ export function getRoutingScores(): { strategy: RoutingStrategy; keySelectionStr
   // from GET /routing, so omitting it would make the toggle look permanently
   // off (and impossible to turn off) after a refetch. Same for the key
   // selection picker (#919).
-  return { strategy, keySelectionStrategy: getKeySelectionStrategy(), weights: weightsFor(strategy), customWeights: getCustomWeights(), exploreEnabled: getExploreEnabled(), scores };
+  // peakAdjusted tells the dashboard whether the weight summary it is about to
+  // render is the raw preset or a peak-hours variant of it (#760) — without it
+  // the numbers would change under the operator with nothing to explain why.
+  const active = weightsWithPeak(strategy);
+  return {
+    strategy,
+    keySelectionStrategy: getKeySelectionStrategy(),
+    weights: active.weights,
+    customWeights: getCustomWeights(),
+    exploreEnabled: getExploreEnabled(),
+    peakAdjusted: active.adjusted,
+    peakHours: getPeakHoursConfig(),
+    scores,
+  };
 }
 
 /**

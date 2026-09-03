@@ -29,11 +29,14 @@ import {
   type RoutingStrategy,
   type RoutingWeights,
   type KeySelectionStrategy,
+  type PeakHoursConfig,
+  isPeakExemptStrategy,
   type Row,
   type TokenUsageData,
 } from '@/lib/routing'
 import { Button } from '@/components/ui/button'
 import { CustomWeightsPopover } from '@/components/custom-weights-popover'
+import { PeakHoursControls } from '@/components/peak-hours-controls'
 import { EmptyState } from '@/components/empty-state'
 import { GettingStarted } from '@/components/getting-started'
 import { GroupHeaderCells, ModelTableHead, SortableGroupRow } from '@/components/model-table'
@@ -109,13 +112,21 @@ export default function FallbackPage() {
   })
 
   const strategyMutation = useMutation({
-    mutationFn: (payload: { strategy: RoutingStrategy; weights?: RoutingWeights; exploreEnabled?: boolean; keySelectionStrategy?: KeySelectionStrategy }) =>
+    mutationFn: (payload: {
+      strategy: RoutingStrategy
+      weights?: RoutingWeights
+      exploreEnabled?: boolean
+      keySelectionStrategy?: KeySelectionStrategy
+      peakHours?: Partial<PeakHoursConfig>
+    }) =>
       apiFetch('/api/fallback/routing', { method: 'PUT', body: JSON.stringify(payload) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['fallback', 'routing'] }),
   })
 
   const strategy: RoutingStrategy = routing?.strategy ?? 'balanced'
   const keySelection: KeySelectionStrategy = routing?.keySelectionStrategy ?? 'auto'
+  const peakHours: PeakHoursConfig = routing?.peakHours ?? { enabled: false, startHour: 18, endHour: 6, timezone: 'UTC' }
+  const peakExempt = isPeakExemptStrategy(strategy)
   const isManual = strategy === 'priority'
 
   // Merge fallback metadata with live scores, keyed by model (#1047: memoized
@@ -321,6 +332,17 @@ export default function FallbackPage() {
                 <span className="cursor-help underline decoration-dotted underline-offset-2">?</span>
               </Tooltip>
             </label>
+          )}
+
+          {/* Peak-hours adjustment (#760). Hidden in Manual, which ignores it —
+              it is a reweight on top of a score, and Manual routes by rank. */}
+          {!isManual && (
+            <PeakHoursControls
+              config={peakHours}
+              saving={strategyMutation.isPending}
+              exempt={peakExempt}
+              onSave={patch => strategyMutation.mutate({ strategy, peakHours: patch })}
+            />
           )}
         </section>
 

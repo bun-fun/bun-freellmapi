@@ -58,6 +58,141 @@ export const BANDIT_PRESETS: Record<Exclude<RoutingStrategy, 'priority' | 'custo
 // dashboard or PUT /api/fallback/routing.
 export const DEFAULT_STRATEGY: RoutingStrategy = 'balanced';
 
+// ── Time-of-day dynamic ranking (#760) ─────────────────────────────────────
+// During an operator-declared peak window free relays are congested, so a
+// model's raw throughput is a weaker signal than its reliability: part of the
+// speed weight is moved onto reliability. This is OFF by default and every
+// parameter is operator-set — routing that silently changes with the wall
+// clock is impossible to reason about when someone reports "it picked a
+// different model this evening".
+//
+// The hour is read in an explicit IANA timezone, never the server's local
+// clock: the box a gateway runs on is frequently UTC (containers, VPS images)
+// while the traffic it serves is not, so `getHours()` would define "peak" as
+// whatever the host image happened to be built with.
+
+/** Persisted peak-hours settings. `enabled` false ⇒ presets are untouched. */
+export interface PeakHoursConfig {
+  enabled: boolean;
+  /** Window start hour, inclusive, 0–23. */
+  startHour: number;
+  /** Window end hour, exclusive, 0–23. May be < startHour (window spans midnight). */
+  endHour: number;
+  /** IANA timezone name the hours are interpreted in. */
+  timezone: string;
+}
+
+export const DEFAULT_PEAK_START_HOUR = 18;
+export const DEFAULT_PEAK_END_HOUR = 6; // default window spans midnight: [18, 24) ∪ [0, 6)
+export const DEFAULT_PEAK_TIMEZONE = 'UTC';
+
+/** Fraction of the speed weight moved onto reliability during peak hours. */
+export const PEAK_SPEED_TO_RELIABILITY = 0.6;
+
+export const DEFAULT_PEAK_HOURS: PeakHoursConfig = {
+  enabled: false,
+  startHour: DEFAULT_PEAK_START_HOUR,
+  endHour: DEFAULT_PEAK_END_HOUR,
+  timezone: DEFAULT_PEAK_TIMEZONE,
+};
+
+/**
+ * Presets exempt from the peak adjustment.
+ *
+ * `fastest` and `reliable` are the two ends of the speed↔reliability axis, and
+ * they are what an operator picks when they have already decided which end they
+ * want. Shifting 60% of `fastest`'s 0.55 speed weight would leave it at
+ * reliability 0.68 / speed 0.22 — i.e. `fastest` would quietly become a slightly
+ * noisy copy of `reliable`, which is a different preset the user could have
+ * selected. `reliable` is exempt for the mirror-image reason: it is already the
+ * reliability extreme, so there is nothing the adjustment can add, and moving
+ * its speed weight only pushes it past the range any preset offers. The
+ * adjustment therefore applies only to the mixed presets (`balanced`,
+ * `smartest`), where trading some speed weight for reliability stays inside the
+ * span the presets already describe. Clamping instead of exempting was the
+ * alternative; exempting is chosen because it keeps each preset's identity
+ * exactly, rather than making two of them silently converge on a third.
+ */
+export const PEAK_EXEMPT_STRATEGIES: readonly RoutingStrategy[] = ['fastest', 'reliable'];
+
+/** Whether this strategy opts out of the peak adjustment (see above). */
+export function isPeakExemptStrategy(strategy: RoutingStrategy): boolean {
+  return PEAK_EXEMPT_STRATEGIES.includes(strategy);
+}
+
+/** True when `hour` is a whole number in 0–23. */
+export function isValidPeakHour(hour: unknown): hour is number {
+  return typeof hour === 'number' && Number.isInteger(hour) && hour >= 0 && hour <= 23;
+}
+
+/** True when `timezone` is an IANA name this runtime's ICU data knows. */
+export function isValidTimezone(timezone: unknown): timezone is string {
+  if (typeof timezone !== 'string' || !timezone.trim()) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The hour (0–23) at `now` in `timezone`. Uses Intl rather than Date#getHours
+ * so the window means the same thing regardless of the host's TZ. An unknown
+ * timezone falls back to UTC instead of throwing — routing must never fail
+ * because a settings row went stale.
+ */
+export function hourInTimezone(now: Date, timezone: string): number {
+  const zone = isValidTimezone(timezone) ? timezone : DEFAULT_PEAK_TIMEZONE;
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', hourCycle: 'h23' })
+    .formatToParts(now);
+  const raw = parts.find(p => p.type === 'hour')?.value ?? '0';
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed % 24 : 0;
+}
+
+/**
+ * True when `now` falls inside the configured window. `startHour === endHour`
+ * is an EMPTY window, not a 24-hour one: an operator who drags both ends to the
+ * same value means "nothing", and the alternative (always peak) would be a
+ * permanent silent reweight from a config that looks like a no-op.
+ */
+export function isPeakHours(config: PeakHoursConfig, now = new Date()): boolean {
+  if (!config.enabled) return false;
+  if (!isValidPeakHour(config.startHour) || !isValidPeakHour(config.endHour)) return false;
+  if (config.startHour === config.endHour) return false;
+  const h = hourInTimezone(now, config.timezone);
+  return config.startHour < config.endHour
+    ? h >= config.startHour && h < config.endHour
+    : h >= config.startHour || h < config.endHour;
+}
+
+/**
+ * Peak-adjusted weights for a bandit preset, plus whether the adjustment
+ * actually fired (the dashboard labels the weight summary from that flag).
+ * Returns the base vector untouched when the feature is off, when the clock is
+ * outside the window, or when the strategy is exempt.
+ */
+export function peakAdjustedWeights(
+  base: RoutingWeights,
+  strategy: RoutingStrategy,
+  config: PeakHoursConfig,
+  now = new Date(),
+): { weights: RoutingWeights; adjusted: boolean } {
+  if (isPeakExemptStrategy(strategy)) return { weights: base, adjusted: false };
+  if (!isPeakHours(config, now)) return { weights: base, adjusted: false };
+  const shift = base.speed * PEAK_SPEED_TO_RELIABILITY;
+  if (shift <= 0) return { weights: base, adjusted: false };
+  return {
+    weights: {
+      reliability: base.reliability + shift,
+      speed: base.speed - shift,
+      intelligence: base.intelligence,
+    },
+    adjusted: true,
+  };
+}
+
 // ── Reliability ───────────────────────────────────────────────────────────
 // Beta(1,1) prior = uniform: an unseen model is genuinely uncertain, not assumed
 // good or bad. With decay-weighted pseudo-counts the alpha/beta are continuous.
