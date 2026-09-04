@@ -32,6 +32,7 @@ const NATIVE_PROVIDERS = new Set([
   'cohere',
   'cloudflare',
   'zhipu',
+  'longcat',
 ]);
 
 export function mapToFreellmapi(model: ModelsDevModel): {

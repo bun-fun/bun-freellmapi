@@ -432,20 +432,14 @@ function upstreamMessage(bodyText: string): string | null {
 }
 
 /**
- * Ask a custom OpenAI-compatible endpoint what it serves. Reuses the provider
- * adapter's own catalog fetch (auth header, proxy, timeout, quota bookkeeping)
- * rather than re-implementing an HTTP call here.
+ * Ask ANY OpenAI-compatible provider (native platform or custom endpoint) what
+ * it serves. Reuses the provider adapter's own catalog fetch (auth header,
+ * proxy, timeout, quota bookkeeping) rather than re-implementing an HTTP call
+ * here. The caller supplies the provider — a native registered provider (longcat
+ * and friends) or the ephemeral custom provider built by discoverEndpointModels.
  */
-export async function discoverEndpointModels(baseUrl: string, apiKey: string): Promise<DiscoveredModel[]> {
-  const provider = new OpenAICompatProvider({
-    platform: 'custom',
-    name: 'Custom (OpenAI-compatible)',
-    baseUrl,
-    // Discovery is interactive — the operator is watching a spinner — so don't
-    // inherit the 120s custom-provider chat timeout.
-    timeoutMs: 30_000,
-  });
-
+export async function discoverProviderModels(provider: OpenAICompatProvider, apiKey: string): Promise<DiscoveredModel[]> {
+  const baseUrl = provider.modelsUrl.replace(/\/models$/, '');
   let res: Response;
   try {
     res = await provider.fetchModelCatalog(apiKey);
@@ -477,6 +471,23 @@ export async function discoverEndpointModels(baseUrl: string, apiKey: string): P
     throw new ModelDiscoveryError(502, `${baseUrl}/models did not return a model list in a format this gateway understands.`);
   }
   return parseModelCatalog(payload);
+}
+
+/**
+ * Ask a custom OpenAI-compatible endpoint what it serves. Reuses the provider
+ * adapter's own catalog fetch (auth header, proxy, timeout, quota bookkeeping)
+ * rather than re-implementing an HTTP call here.
+ */
+export async function discoverEndpointModels(baseUrl: string, apiKey: string): Promise<DiscoveredModel[]> {
+  const provider = new OpenAICompatProvider({
+    platform: 'custom',
+    name: 'Custom (OpenAI-compatible)',
+    baseUrl,
+    // Discovery is interactive — the operator is watching a spinner — so don't
+    // inherit the 120s custom-provider chat timeout.
+    timeoutMs: 30_000,
+  });
+  return discoverProviderModels(provider, apiKey);
 }
 
 /** Output cap on the probe request. Exported so the test can assert the floor

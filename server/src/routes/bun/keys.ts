@@ -8,6 +8,7 @@ import { resolveCustomEndpointKey, customEndpointKeyIds } from '../../services/c
 import { normalizeBaseUrl } from '../../lib/endpoint-scope.js';
 import { assessProviderUrl } from '../../lib/url-guard.js';
 import { discoverEndpointModels, probeEndpointModel, classifyModelId, ModelDiscoveryError } from '../../services/model-discovery.js';
+import { discoverNativePlatformModels } from '../../services/native-model-discovery.js';
 import { clearCooldownsForKey, getActiveCooldownsForKeys } from '../../services/ratelimit.js';
 import { registerCustomChatModels, type CustomModelEntry } from '../../services/custom-model-register.js';
 import { registerCustomMediaModel } from '../../services/custom-media-register.js';
@@ -411,6 +412,24 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
       // configured; the provider omits the auth header on outgoing calls.
       const keyToStore = isKeyless ? (rawKey || 'no-key') : rawKey;
 
+      // A native provider with zero catalog rows (e.g. longcat — models.dev has
+      // no entries) would otherwise be selectable with nothing to route to.
+      // Discovery reuses the registered provider's OWN /models endpoint with the
+      // key just saved and registers what it returns as platform rows. It is
+      // strictly best-effort: the key is already saved, so a slow or unreachable
+      // catalog must never fail the request — errors and a zero-result are folded
+      // into the notice below.
+      const modelsDiscovered = async (db: ReturnType<typeof getDb>): Promise<number> => {
+        if (platform === 'custom') return 0;
+        if (enabledModelCount(db, platform) > 0) return 0;
+        try {
+          const result = await discoverNativePlatformModels(db, platform, keyToStore);
+          return result?.registered ?? 0;
+        } catch {
+          return 0;
+        }
+      };
+
       const db = getDb();
       const existingCount = (db.prepare('SELECT COUNT(*) as cnt FROM api_keys WHERE platform = ? AND enabled = 1')
         .get(platform) as { cnt: number }).cnt;
@@ -425,6 +444,8 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
             db.prepare(`UPDATE models SET enabled = 1 WHERE platform = ?`).run(platform);
           }
           const modelsAvailable = enabledModelCount(db, platform);
+          // No real credential to query a live /models with, so a keyless
+          // platform caps the catalog source at what the seed/sync registered.
           const notice = modelsAvailable === 0
             ? `Key saved, but no ${platform} models are in your catalog yet. `
               + `Add ${platform} as a custom OpenAI-compatible provider with its base URL `
@@ -455,13 +476,25 @@ export async function apiKeysRoute(req: Request, _url: URL): Promise<Response> {
       }
 
       const modelsAvailable = enabledModelCount(db, platform);
-      const notice = modelsAvailable === 0
-        ? `Key saved, but no ${platform} models are in your catalog yet. `
-          + `Add ${platform} as a custom OpenAI-compatible provider with its base URL `
-          + `to discover available models, or wait for a catalog update.`
-        : undefined;
+      // A native provider with zero catalog rows is brought to life by querying
+      // its own /models with the key just saved (best-effort, never fails the
+      // save). The count rides into the notice so the operator sees the models
+      // appear immediately instead of an empty catalog.
+      const discoveredCount = modelsAvailable === 0
+        ? await modelsDiscovered(db)
+        : 0;
+      const notice = discoveredCount > 0
+        ? `Key saved — discovered and registered ${discoveredCount} ${platform} model(s) from ${platform}'s own model list.`
+        : modelsAvailable === 0
+          ? `Key saved, but no ${platform} models are in your catalog yet, and the model list could not be auto-discovered. `
+            + `Add ${platform} as a custom OpenAI-compatible provider with its base URL `
+            + `to discover available models, or try again when the endpoint is reachable.`
+          : undefined;
 
-      return jsonResponse({ success: true, platform, modelsAvailable, notice }, 201);
+      return jsonResponse({
+        success: true, platform, modelsAvailable, notice,
+        ...(discoveredCount > 0 ? { modelsRegistered: discoveredCount } : {}),
+      }, 201);
     } catch (err: any) {
       return jsonResponse({ error: { message: err.message } }, 400);
     }
