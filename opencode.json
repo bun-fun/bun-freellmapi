@@ -4,9 +4,9 @@
   "provider": {
     "freellmapi": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "FreeLLMAPI (local)",
+      "name": "FreeLLMAPI (hf)",
       "options": {
-        "baseURL": "http://127.0.0.1:3001/v1"
+        "baseURL": "https://bun008-freellmapi.hf.space/v1"
       },
       "models": {
         "auto": {

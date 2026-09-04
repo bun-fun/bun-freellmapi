@@ -630,6 +630,7 @@ function GeneralSection({ active }: { active: boolean }) {
         )}
       />
       <UpdateChecker active={active} />
+      <ModelsDevSync active={active} />
     </>
   )
 }
@@ -1037,6 +1038,92 @@ function UpdateChecker({ active }: { active: boolean }) {
         </DialogPopup>
       </Dialog>
     </>
+  )
+}
+
+interface ModelsDevSyncResult {
+  fetched: number
+  added: number
+  updated: number
+  retired: number
+  skipped: number
+}
+
+/**
+ * One manual models.dev reconcile, surfaced in the General settings section.
+ * The server refreshes the catalog on a timer already (startModelsDevSync,
+ * every 12h) and exposes the same pass at POST /api/models/sync/models-dev —
+ * this is the on-demand equivalent for an operator who wants the current feed
+ * applied without waiting for the interval, or after toggling a disable env
+ * back on. Fires only when the dialog section is actually open (`active`),
+ * mirroring the UpdateChecker's lazy load contract.
+ */
+function ModelsDevSync({ active }: { active: boolean }) {
+  const { t } = useI18n()
+  const [syncing, setSyncing] = useState(false)
+  const [error, setError] = useState(false)
+  const [result, setResult] = useState<ModelsDevSyncResult | null>(null)
+
+  // On failure the server keeps the last-good snapshot and answers 502; state
+  // here never lies about it. Reset the transient flags when the dialog opens.
+  useEffect(() => {
+    if (active) {
+      setError(false)
+      setResult(null)
+    }
+  }, [active])
+
+  async function sync() {
+    setSyncing(true)
+    setError(false)
+    setResult(null)
+    try {
+      setResult(await apiFetch<ModelsDevSyncResult>('/api/models/sync/models-dev', {
+        method: 'POST',
+      }))
+    } catch {
+      setError(true)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  return (
+    <Row
+      label={t('settings.modelsDevSync')}
+      hint={t('settings.modelsDevSyncHelp')}
+      control={(
+        <div className="flex items-center gap-2">
+          {result && (
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {result.added + result.updated + result.retired === 0
+                ? t('settings.modelsDevSyncSuccess')
+                : t('settings.modelsDevSyncResult', {
+                    fetched: result.fetched,
+                    added: result.added,
+                    updated: result.updated,
+                    retired: result.retired,
+                    skipped: result.skipped,
+                  })}
+            </span>
+          )}
+          {error && (
+            <span className="text-xs text-destructive">{t('settings.modelsDevSyncError')}</span>
+          )}
+          <button
+            type="button"
+            onClick={() => void sync()}
+            disabled={syncing}
+            title={t('settings.modelsDevSyncRun')}
+            aria-label={t('settings.modelsDevSyncRun')}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            <RefreshCw className={`size-3.5 ${syncing ? 'animate-spin' : ''}`} aria-hidden />
+            {syncing ? t('settings.modelsDevSyncRunning') : t('settings.modelsDevSyncRun')}
+          </button>
+        </div>
+      )}
+    />
   )
 }
 

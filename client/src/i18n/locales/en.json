@@ -164,7 +164,15 @@
     "autoUpdateCheck": "Automatic update check",
     "autoUpdateCheckHelp": "Checks GitHub once a day for a new release and shows a reminder. Off by default.",
     "openReleases": "Open GitHub Releases",
-    "restartAfterUpdate": "Restart FreeLLMAPI after the build completes."
+    "restartAfterUpdate": "Restart FreeLLMAPI after the build completes.",
+    "modelsDevSync": "Sync available models",
+    "modelsDevSyncDescription": "Fetch the current list of free models from models.dev and apply it: newly available models join the chain, ones no longer free are disabled, and metadata refreshes. On by default every 12 hours.",
+    "modelsDevSyncHelp": "Contacts models.dev and reconciles your catalog against its feed. New free models are added to the end of the chain; models the feed no longer lists as free are disabled (never deleted). Only entries the feed owns are touched — a model an operator switched off stays off, and custom endpoints are untouched.",
+    "modelsDevSyncRun": "Sync now",
+    "modelsDevSyncRunning": "Syncing…",
+    "modelsDevSyncResult": "Fetched {fetched} · added {added} · updated {updated} · retired {retired} · skipped {skipped}",
+    "modelsDevSyncSuccess": "Catalog is in sync with models.dev.",
+    "modelsDevSyncError": "Could not reach models.dev. Last-good catalog kept."
   },
   "models": {
     "title": "Models",
